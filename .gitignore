@@ -1,0 +1,14 @@
+# Dados pessoais da coleção — preços pagos, histórico de compra.
+# O repositório é público; estes arquivos ficam só na máquina.
+*.xlsx
+ludoteca-backup*.json
+
+# Rascunhos de ferramentas de assistente
+_skill-staging/
+
+# Guia local
+githubGuia.md
+
+# Windows
+Thumbs.db
+desktop.ini

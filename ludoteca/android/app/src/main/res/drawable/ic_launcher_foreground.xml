@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Camada de frente do ícone: um meeple.
+
+  O desenho vive num sistema 100x100, mas o grupo escala para 60% em torno do
+  centro. Isso é obrigatório em adaptive icon: o launcher recorta a camada num
+  círculo, num squircle ou num quadrado arredondado, conforme o aparelho, e só
+  a região central é garantida. Desenhar até a borda faria o launcher cortar
+  braços e pernas do meeple.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <group
+        android:pivotX="50"
+        android:pivotY="50"
+        android:scaleX="0.60"
+        android:scaleY="0.60">
+
+        <!-- Cabeça -->
+        <path
+            android:fillColor="#FCFCFB"
+            android:pathData="M33,25 a17,17 0 1,0 34,0 a17,17 0 1,0 -34,0 Z" />
+
+        <!--
+          Corpo, traçado no sentido horário a partir do lado esquerdo do
+          pescoço: ombro, braço por fora, mão, braço por dentro, axila,
+          quadril, perna, e o espelho do outro lado. O fecho reto no pescoço
+          fica escondido atrás da cabeça.
+        -->
+        <path
+            android:fillColor="#FCFCFB"
+            android:pathData="M38,40 L24,46 L7,55 L4,65 L20,69 L34,64 L31,79 L17,94 L43,94 L50,78 L57,94 L83,94 L69,79 L66,64 L80,69 L96,65 L93,55 L76,46 L62,40 Z" />
+    </group>
+</vector>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Azul do slot 1 da paleta do app, o mesmo da cor primária. -->
+    <color name="ic_launcher_background">#2A78D6</color>
+</resources>

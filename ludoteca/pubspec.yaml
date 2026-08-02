@@ -1,0 +1,53 @@
+name: ludoteca
+description: Gerenciador da minha coleção de jogos de tabuleiro.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Banco local. Todos os dados ficam no próprio celular.
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # API do BoardGameGeek (XML API2).
+  http: ^1.2.2
+  xml: ^6.5.0
+
+  # `firstOrNull` e afins — não estão no SDK, vêm daqui.
+  collection: ^1.18.0
+
+  # Capas dos jogos, com cache em disco para funcionar offline.
+  cached_network_image: ^3.4.1
+
+  provider: ^6.1.2
+
+  # Backup: exportar/importar o JSON da coleção.
+  #
+  # NÃO trave estes dois numa versão antiga. A tentação é travar porque as APIs
+  # deles mudam entre versões menores, mas versão antiga de plugin Android traz
+  # um problema pior: o `file_picker` 8.1.2 compila contra android-34 e uma
+  # dependência transitiva dele exige compileSdk 36, o que quebra o build.
+  # A API é conferida pelo `flutter analyze`; a incompatibilidade de compileSdk
+  # só aparece no fim de um build de vários minutos.
+  # share_plus fica no 12 e não no 13 porque o file_picker 11 conflita com o 13
+  # (dependência transitiva em comum). Os dois são versões atuais.
+  share_plus: ^12.0.2
+  file_picker: ^11.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+  # Só para teste: roda SQLite no desktop, para os testes de migração
+  # abrirem um banco de verdade. NÃO entra no APK.
+  sqflite_common_ffi: ^2.3.3
+
+flutter:
+  uses-material-design: true

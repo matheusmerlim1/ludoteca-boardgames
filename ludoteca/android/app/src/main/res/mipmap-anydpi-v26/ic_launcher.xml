@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon (Android 8.0 / API 26 e acima, ou seja, praticamente todos os
+  aparelhos hoje). O launcher aplica a máscara dele por cima destas duas
+  camadas. Aparelhos mais antigos caem nos PNG de mipmap-*dpi.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
