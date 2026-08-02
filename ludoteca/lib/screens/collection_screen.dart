@@ -373,6 +373,11 @@ class _ResumoFiltros extends StatelessWidget {
     final viz = context.viz;
 
     final itens = <({String rotulo, VoidCallback remover})>[
+      if (store.sort != SortKey.nome)
+        (
+          rotulo: 'por ${store.sort.label.toLowerCase()}',
+          remover: () => store.setSort(SortKey.nome),
+        ),
       if (store.playerCount != null)
         (
           rotulo: '${store.playerCount} jogadores',
@@ -438,12 +443,17 @@ class _FilterBar extends StatelessWidget {
     final viz = context.viz;
     final text = Theme.of(context).textTheme;
 
-    // Quantos filtros estão ligados, para o botão avisar mesmo fechado.
+    // Quantos ajustes estão ligados, para o botão avisar mesmo fechado.
+    //
+    // A ordenação entra na conta apesar de não esconder jogo nenhum: com o
+    // painel fechado, uma lista fora de ordem alfabética e sem explicação
+    // parece defeito.
     final ativos = (store.playerCount != null ? 1 : 0) +
         (store.onlyNeverPlayed ? 1 : 0) +
         (store.showExpansions ? 1 : 0) +
         (store.showSold ? 1 : 0) +
         (store.showPlayedNotOwned ? 1 : 0) +
+        (store.sort != SortKey.nome ? 1 : 0) +
         store.tagFilter.length;
 
     return Padding(
@@ -526,6 +536,40 @@ class _FilterBar extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
+          Text(
+            'Tempo sem jogar',
+            style: text.labelSmall?.copyWith(color: viz.inkSecondary),
+          ),
+          const SizedBox(height: 6),
+          // Estas duas ordenam em vez de esconder jogos — a pergunta
+          // ("qual está parado há mais tempo?") é sobre a ordem da lista, não
+          // sobre um recorte dela. Ficam aqui, e não só no menu de ordenação,
+          // porque é neste painel que se procura por elas.
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _Chip(
+                label: 'Mais tempo parados',
+                selected: store.sort == SortKey.esquecidos,
+                onTap: () => store.setSort(
+                  store.sort == SortKey.esquecidos
+                      ? SortKey.nome
+                      : SortKey.esquecidos,
+                ),
+              ),
+              _Chip(
+                label: 'Jogados por último',
+                selected: store.sort == SortKey.jogadosRecentemente,
+                onTap: () => store.setSort(
+                  store.sort == SortKey.jogadosRecentemente
+                      ? SortKey.nome
+                      : SortKey.jogadosRecentemente,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -564,7 +608,10 @@ class _FilterBar extends StatelessWidget {
                   selected: store.tagFilter.isNotEmpty,
                   onTap: () => _abrirTemas(context, store),
                 ),
-                if (store.hasActiveFilters)
+                // Também aparece com só uma ordenação escolhida: `clearFilters`
+                // devolve a ordem para nome, e sem o botão não haveria como
+                // desfazer isso a não ser tocando no mesmo chip.
+                if (store.hasActiveFilters || store.sort != SortKey.nome)
                   TextButton.icon(
                     onPressed: store.clearFilters,
                     icon: const Icon(Icons.close, size: 16),

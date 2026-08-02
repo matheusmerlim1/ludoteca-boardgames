@@ -13,6 +13,7 @@ import 'package:ludoteca/screens/game_detail_screen.dart';
 import 'package:ludoteca/screens/settings_screen.dart';
 import 'package:ludoteca/services/share_service.dart';
 import 'package:ludoteca/state/collection_store.dart';
+import 'package:ludoteca/widgets/game_card.dart';
 import 'package:ludoteca/widgets/pick_game_sheet.dart';
 import 'package:ludoteca/theme.dart';
 import 'package:provider/provider.dart';
@@ -483,6 +484,7 @@ void main() {
 
         for (final rotulo in [
           'Todos', '1', '4', '8',
+          'Mais tempo parados', 'Jogados por último',
           'Nunca jogados', 'Itens agrupados', 'Vendidos',
         ]) {
           final chip = find.widgetWithText(FilterChip, rotulo);
@@ -600,6 +602,112 @@ void main() {
         tamanho: const Size(320, 900),
       );
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('tempo sem jogar', () {
+    /// Três jogos com datas diferentes de última partida.
+    ///
+    /// O conjunto padrão não serve: nele só um jogo tem partida, e as duas
+    /// ordens dariam o mesmo resultado — o teste passaria sem provar nada.
+    Future<void> abreOPainel(WidgetTester tester) async {
+      await tester.runAsync(() async {
+        _temp = await Directory.systemTemp.createTemp('ludoteca_parados');
+        _db = AppDatabase.paraArquivo('${_temp.path}/t.db');
+        final repo = GameRepository(database: _db);
+
+        final antigo = await repo.insertGame(const Game(name: 'Antigo'));
+        final recente = await repo.insertGame(const Game(name: 'Recente'));
+        await repo.insertGame(const Game(name: 'Nunca'));
+
+        await repo.insertPlay(
+          Play(gameId: antigo, playedAt: DateTime(2024, 1, 10)),
+        );
+        await repo.insertPlay(
+          Play(gameId: recente, playedAt: DateTime(2026, 6, 20)),
+        );
+
+        _store = CollectionStore(repository: repo);
+        await _store.load();
+      });
+      addTearDown(() => _limpa(tester));
+
+      await _renderiza(
+        tester,
+        const CollectionScreen(),
+        brilho: Brightness.light,
+      );
+      await _abreFiltros(tester);
+    }
+
+    /// Os nomes dos jogos na ordem em que aparecem na lista.
+    List<String> nomesNaTela(WidgetTester tester) => tester
+        .widgetList<GameCard>(find.byType(GameCard))
+        .map((c) => c.entry.displayName)
+        .toList();
+
+    testWidgets('"Mais tempo parados" traz o esquecido primeiro',
+        (tester) async {
+      await abreOPainel(tester);
+      await tester.tap(find.widgetWithText(FilterChip, 'Mais tempo parados'));
+      await tester.pumpAndSettle();
+
+      final nomes = nomesNaTela(tester);
+      expect(nomes.indexOf('Antigo'), lessThan(nomes.indexOf('Recente')));
+
+      // Nunca jogado vai para o fim nas **duas** direções: sem data, ele não é
+      // o mais recente nem o mais antigo — é desconhecido. Quem quer esses tem
+      // o filtro "Nunca jogados".
+      expect(nomes.last, 'Nunca');
+    });
+
+    testWidgets('"Jogados por último" inverte', (tester) async {
+      await abreOPainel(tester);
+      await tester.tap(find.widgetWithText(FilterChip, 'Jogados por último'));
+      await tester.pumpAndSettle();
+
+      final nomes = nomesNaTela(tester);
+      expect(nomes.indexOf('Recente'), lessThan(nomes.indexOf('Antigo')));
+      expect(nomes.last, 'Nunca');
+    });
+
+    testWidgets('as duas se excluem — tocar numa desliga a outra',
+        (tester) async {
+      await abreOPainel(tester);
+      await tester.tap(find.widgetWithText(FilterChip, 'Mais tempo parados'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilterChip, 'Jogados por último'));
+      await tester.pumpAndSettle();
+
+      final store = _store;
+      expect(store.sort, SortKey.jogadosRecentemente);
+    });
+
+    testWidgets('tocar de novo volta para a ordem alfabética', (tester) async {
+      await abreOPainel(tester);
+      final chip = find.widgetWithText(FilterChip, 'Mais tempo parados');
+
+      await tester.tap(chip);
+      await tester.pumpAndSettle();
+      expect(_store.sort, SortKey.esquecidos);
+
+      await tester.tap(chip);
+      await tester.pumpAndSettle();
+      expect(_store.sort, SortKey.nome);
+    });
+
+    testWidgets('com o painel fechado, a ordem escolhida continua visível',
+        (tester) async {
+      // Lista fora de ordem alfabética e sem explicação parece defeito.
+      await abreOPainel(tester);
+      await tester.tap(find.widgetWithText(FilterChip, 'Mais tempo parados'));
+      await tester.pumpAndSettle();
+
+      // O ícone troca quando o painel está aberto.
+      await tester.tap(find.byIcon(Icons.filter_list_off));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('há mais tempo sem jogar'), findsOneWidget);
     });
   });
 
