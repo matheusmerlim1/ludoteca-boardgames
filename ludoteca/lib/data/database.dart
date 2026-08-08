@@ -55,6 +55,32 @@ class AppDatabase {
   static const _scoresIndexDdl =
       'CREATE INDEX idx_play_scores_play ON play_scores(play_id)';
 
+  /// As pessoas com quem você joga.
+  ///
+  /// Tabela própria em vez de deduzir os nomes das partidas: assim o nome
+  /// sobrevive a apagar a partida em que ele apareceu pela primeira vez, e as
+  /// sugestões podem ordenar por quem joga mais e mais recentemente sem varrer
+  /// o histórico inteiro a cada vez que a folha de partida abre.
+  ///
+  /// `COLLATE NOCASE` no índice: "Ana" e "ana" são a mesma pessoa, e duas
+  /// linhas para ela dariam dois chips iguais na sugestão.
+  ///
+  /// Não há coluna de contagem aqui de propósito: quantas partidas cada pessoa
+  /// jogou é uma pergunta que `play_scores` responde sempre certo. Um contador
+  /// mantido à mão erraria na primeira edição de partida — regravar o placar
+  /// somaria de novo — e passaria despercebido, porque ele só mexe na ordem
+  /// das sugestões.
+  static const _playersDdl = '''
+    CREATE TABLE players (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      name         TEXT NOT NULL,
+      last_used_at TEXT
+    )
+  ''';
+
+  static const _playersIndexDdl =
+      'CREATE UNIQUE INDEX idx_players_name ON players(name COLLATE NOCASE)';
+
   /// Temas e mecânicas, e o vínculo deles com os jogos.
   static const _tagsDdl = [
     '''
@@ -112,7 +138,14 @@ class AppDatabase {
   ///          diferentes: doar não devolve dinheiro nenhum, e trocar transfere
   ///          o valor investido para o jogo que entrou — tratar as três como
   ///          venda mentiria no custo.
-  static const _version = 7;
+  /// v7 → v8: tabela `players`, com quem você joga.
+  ///
+  ///          Os nomes já vinham sendo sugeridos, mas deduzidos das partidas
+  ///          gravadas: apagar a única partida de alguém apagava a pessoa junto.
+  ///          A migração semeia a tabela com o que já existe — inclusive os
+  ///          nomes digitados no campo antigo "quem ganhou", que nunca tinham
+  ///          entrado na sugestão.
+  static const _version = 8;
 
   Database? _db;
 
@@ -172,6 +205,11 @@ class AppDatabase {
           );
           await db.execute(_scoresDdl);
           await db.execute(_scoresIndexDdl);
+        }
+        if (from < 8) {
+          await db.execute(_playersDdl);
+          await db.execute(_playersIndexDdl);
+          await _semeiaJogadores(db);
         }
       },
     );
@@ -247,6 +285,8 @@ class AppDatabase {
     await db.execute(_settingsDdl);
     await db.execute(_scoresDdl);
     await db.execute(_scoresIndexDdl);
+    await db.execute(_playersDdl);
+    await db.execute(_playersIndexDdl);
     for (final ddl in _tagsDdl) {
       await db.execute(ddl);
     }
@@ -255,6 +295,35 @@ class AppDatabase {
     await db.execute('CREATE INDEX idx_plays_date ON plays(played_at)');
     await db.execute('CREATE INDEX idx_games_parent ON games(parent_id)');
     await db.execute('CREATE INDEX idx_games_bgg ON games(bgg_id)');
+  }
+
+  /// Semeia `players` com quem já aparece no histórico.
+  ///
+  /// Duas fontes, e a segunda é a que importa para quem já usava o app: o campo
+  /// livre "quem ganhou" da partida. Ele existe desde a primeira versão e nunca
+  /// alimentou sugestão nenhuma — sem trazê-lo, atualizar o app deixaria a lista
+  /// de pessoas vazia para quem sempre anotou o vencedor ali.
+  ///
+  /// O `INSERT OR IGNORE` cuida dos repetidos: o índice em `name COLLATE NOCASE`
+  /// é quem decide que "Ana" e "ana" são a mesma pessoa.
+  static Future<void> _semeiaJogadores(Database db) async {
+    final agora = DateTime.now().toIso8601String();
+
+    await db.execute('''
+      INSERT OR IGNORE INTO players (name, last_used_at)
+      SELECT TRIM(player_name), ?
+      FROM play_scores
+      WHERE TRIM(player_name) <> ''
+      GROUP BY TRIM(player_name) COLLATE NOCASE
+    ''', [agora]);
+
+    await db.execute('''
+      INSERT OR IGNORE INTO players (name, last_used_at)
+      SELECT TRIM(winner), ?
+      FROM plays
+      WHERE winner IS NOT NULL AND TRIM(winner) <> ''
+      GROUP BY TRIM(winner) COLLATE NOCASE
+    ''', [agora]);
   }
 
   Future<void> close() async {

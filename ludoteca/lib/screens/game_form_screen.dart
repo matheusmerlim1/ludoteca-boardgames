@@ -319,6 +319,11 @@ class _GameFormScreenState extends State<GameFormScreen> {
               ],
             ),
 
+            // Jogo de outra pessoa não tem custo seu — o próprio grupo acima
+            // diz isso. Manter os campos aqui convidaria a preencher um preço
+            // que o app depois ignora de propósito, e o número ficaria no banco
+            // parecendo dinheiro seu.
+            if (_ownership != Ownership.jogada)
             _Grupo(
               titulo: 'Custos',
               children: [
@@ -475,7 +480,18 @@ class _GameFormScreenState extends State<GameFormScreen> {
             const SizedBox(height: 8),
             FilledButton(
               onPressed: _salvando ? null : _salvar,
-              child: Text(_editando ? 'Salvar alterações' : 'Adicionar à coleção'),
+              // "Adicionar à coleção" só cabe quando o jogo é seu. Para o que
+              // você jogou na casa de alguém, esse rótulo diz o contrário do
+              // que o botão faz — e a dúvida aparece bem na hora de confirmar.
+              child: Text(switch ((editando: _editando, tipo: _ownership)) {
+                (editando: true, tipo: _) => 'Salvar alterações',
+                (editando: false, tipo: Ownership.jogada) =>
+                  'Salvar e registrar a partida',
+                (editando: false, tipo: Ownership.desejada) =>
+                  'Adicionar aos desejados',
+                (editando: false, tipo: Ownership.propria) =>
+                  'Adicionar à coleção',
+              }),
             ),
             if (_bggId != null) ...[
               const SizedBox(height: 12),
@@ -604,11 +620,16 @@ class _GameFormScreenState extends State<GameFormScreen> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            _editando
-                ? '${jogo.displayName} atualizado.'
-                : '${jogo.displayName} entrou na coleção.',
-          ),
+          content: Text(switch ((editando: _editando, tipo: _ownership)) {
+            (editando: true, tipo: _) => '${jogo.displayName} atualizado.',
+            // Ele não entrou na estante de ninguém: entrou no seu histórico.
+            (editando: false, tipo: Ownership.jogada) =>
+              '${jogo.displayName} salvo como jogo de outra pessoa.',
+            (editando: false, tipo: Ownership.desejada) =>
+              '${jogo.displayName} entrou na lista de desejos.',
+            (editando: false, tipo: Ownership.propria) =>
+              '${jogo.displayName} entrou na coleção.',
+          }),
         ),
       );
     } catch (e) {

@@ -22,11 +22,11 @@ class _HomeShellState extends State<HomeShell> {
       // IndexedStack preserva o scroll e os filtros de cada aba ao trocar.
       body: IndexedStack(
         index: _index,
-        children: const [
-          CollectionScreen(),
-          WishlistScreen(),
-          CostsScreen(),
-          SettingsScreen(),
+        children: [
+          const CollectionScreen(),
+          const WishlistScreen(),
+          CostsScreen(onVerColecao: () => setState(() => _index = 0)),
+          const SettingsScreen(),
         ],
       ),
       bottomNavigationBar: NavigationBar(

@@ -76,6 +76,8 @@ class CostStats {
     required this.measuredMinutes,
     required this.playsWithMeasuredDuration,
     required this.monthlyOwnershipCost,
+    required this.datedGameCount,
+    required this.undatedGameCount,
     required this.idleValue,
     required this.compositionByGame,
     required this.compositionByType,
@@ -116,8 +118,21 @@ class CostStats {
   final int playsWithMeasuredDuration;
 
   /// Soma do custo de posse mensal de cada jogo — "minha coleção me custa
-  /// tanto por mês".
+  /// tanto por mês". Só entram os jogos com data de compra.
   final double monthlyOwnershipCost;
+
+  /// Quantos jogos entraram nessa conta, e quantos ficaram de fora por não
+  /// terem data de compra.
+  ///
+  /// Sem estes dois números a tela não tem como distinguir uma coleção que
+  /// custa pouco por mês de uma coleção sem datas preenchidas — as duas somam
+  /// zero, e uma delas está mentindo.
+  final int datedGameCount;
+  final int undatedGameCount;
+
+  /// Verdadeiro quando nenhum jogo tem data de compra: aí o custo por mês não
+  /// é zero, é desconhecido.
+  bool get monthlyCostIsUnknown => datedGameCount == 0;
 
   /// Pizza 1: onde o dinheiro está, por jogo. No máximo 6 fatias.
   final List<Slice> compositionByGame;
@@ -169,10 +184,14 @@ class CostStats {
   /// Quanto do acervo nunca foi à mesa, em dinheiro.
   final double idleValue;
 
+  /// Os rankings vêm **inteiros**, não cortados no top 8.
+  ///
+  /// Quem corta é a tela, que sabe quantas linhas cabem e oferece o "ver
+  /// todos". Cortar aqui obrigaria a recalcular tudo para expandir uma lista —
+  /// e um ranking com metade dos jogos não responde "onde o meu está".
   static CostStats compute({
     required List<GameEntry> entries,
     int topSlices = 5,
-    int rankLength = 8,
   }) {
     // Jogo desejado nunca entra em nada: não é seu e não foi jogado.
     final considerados =
@@ -221,8 +240,14 @@ class CostStats {
         .where((e) => e.neverPlayed)
         .fold<double>(0, (s, e) => s + e.totalInvested);
 
+    // Só dá para dividir por meses de posse quem tem data de compra. Contar
+    // quantos ficaram de fora é o que separa "a coleção custa zero por mês"
+    // (falso, e foi o que o app dizia) de "faltam datas para calcular".
+    final comData = topo.where((e) => e.costPerMonth != null).toList();
+    final semData = topo.length - comData.length;
+
     final monthlyOwnership =
-        topo.fold<double>(0, (s, e) => s + (e.costPerMonth ?? 0));
+        comData.fold<double>(0, (s, e) => s + e.costPerMonth!);
 
     // --- pizzas por jogo ----------------------------------------------------
     final compositionByGame =
@@ -306,15 +331,16 @@ class CostStats {
       measuredMinutes: minutosMedidos,
       playsWithMeasuredDuration: partidasMedidas,
       monthlyOwnershipCost: monthlyOwnership,
+      datedGameCount: comData.length,
+      undatedGameCount: semData,
       idleValue: idleValue,
       compositionByGame: compositionByGame,
       compositionByType: compositionByType,
       compositionByMonthlyCost: compositionByMonthlyCost,
       monthlySpend: monthlySpend,
-      cheapestPerPlay: baratos.take(rankLength).map(porPartida).toList(),
-      priciestPerPlay: caros.take(rankLength).map(porPartida).toList(),
+      cheapestPerPlay: baratos.map(porPartida).toList(),
+      priciestPerPlay: caros.map(porPartida).toList(),
       byCostPerMonth: porMes
-          .take(rankLength)
           .map((e) => RankedGame(
                 entry: e,
                 value: e.costPerMonth!,
@@ -323,7 +349,6 @@ class CostStats {
               ))
           .toList(),
       mostPlayed: maisJogados
-          .take(rankLength)
           .map((e) => RankedGame(
                 entry: e,
                 value: e.playCount.toDouble(),
@@ -331,7 +356,6 @@ class CostStats {
               ))
           .toList(),
       byCostPerHour: porHora
-          .take(rankLength)
           .map((e) => RankedGame(
                 entry: e,
                 value: e.costPerHour!,
@@ -341,7 +365,6 @@ class CostStats {
               ))
           .toList(),
       mostHours: maisHoras
-          .take(rankLength)
           .map((e) => RankedGame(
                 entry: e,
                 // O valor da barra é em horas; o rótulo formata.

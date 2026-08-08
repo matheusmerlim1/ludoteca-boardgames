@@ -278,6 +278,52 @@ void main() {
       await app.close();
     });
 
+    test('quem estava no campo "quem ganhou" vira uma pessoa cadastrada',
+        () async {
+      // Esse campo existe desde a v1 e nunca alimentou sugestão nenhuma. Sem
+      // trazê-lo na migração, quem sempre anotou o vencedor ali atualizaria o
+      // app e encontraria a lista de pessoas vazia.
+      await _criaBancoV1(caminho);
+      final antigo = await databaseFactory.openDatabase(caminho);
+      await antigo.insert('games', {
+        'name': 'Ark Nova',
+        'price': 0.0,
+        'sleeve_cost': 0.0,
+        'accessory_cost': 0.0,
+        'manual_play_count': 0,
+        'is_expansion': 0,
+        'sold': 0,
+        'created_at': '2024-01-15',
+      });
+      await antigo.insert('plays', {
+        'game_id': 1,
+        'played_at': '2025-06-01',
+        'winner': 'Matheus',
+      });
+      await antigo.insert('plays', {
+        'game_id': 1,
+        'played_at': '2025-07-01',
+        'winner': 'matheus',
+      });
+      await antigo.insert('plays', {
+        'game_id': 1,
+        'played_at': '2025-08-01',
+        'winner': '  ',
+      });
+      await antigo.close();
+
+      final app = AppDatabase.paraArquivo(caminho);
+      final db = await app.db;
+
+      final pessoas = await db.query('players');
+      // Uma pessoa só: a grafia diferente não cria outra, e o campo em branco
+      // não vira uma pessoa sem nome.
+      expect(pessoas.length, 1);
+      expect(pessoas.first['name'], 'Matheus');
+
+      await app.close();
+    });
+
     test('play_scores nasce com a partida apagando o placar junto', () async {
       await _criaBancoV1(caminho);
       await _povoa(caminho);

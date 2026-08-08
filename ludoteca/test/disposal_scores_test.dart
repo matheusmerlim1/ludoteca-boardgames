@@ -293,6 +293,87 @@ void main() {
       expect(nomes.where((n) => n == 'Ana').length, 1);
     });
 
+    test('o nome fica guardado mesmo depois de apagar a partida', () async {
+      // O motivo da tabela `players`: antes os nomes eram deduzidos das
+      // partidas gravadas, e apagar a única partida de alguém apagava a pessoa
+      // da sugestão junto.
+      final id = await repo.insertGame(const Game(name: 'Ark Nova'));
+      final playId = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 1)),
+      );
+      await repo.setScores(playId, const [PlayScore(playerName: 'Bia')]);
+
+      await repo.deletePlay(playId);
+
+      expect(await repo.playerNames(), contains('Bia'));
+    });
+
+    test('a mesma pessoa em duas grafias é uma pessoa só', () async {
+      final id = await repo.insertGame(const Game(name: 'Ark Nova'));
+      final p1 = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 1)),
+      );
+      final p2 = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 8)),
+      );
+
+      await repo.setScores(p1, const [PlayScore(playerName: 'Ana')]);
+      await repo.setScores(p2, const [PlayScore(playerName: 'ana')]);
+
+      // Dois chips iguais na sugestão seriam confusos e ainda dividiriam a
+      // contagem da pessoa entre duas linhas.
+      final nomes = await repo.playerNames();
+      expect(nomes.where((n) => n.toLowerCase() == 'ana').length, 1);
+    });
+
+    test('quem joga mais vem primeiro na sugestão', () async {
+      final id = await repo.insertGame(const Game(name: 'Ark Nova'));
+
+      for (var i = 1; i <= 3; i++) {
+        final p = await repo.insertPlay(
+          Play(gameId: id, playedAt: DateTime(2026, 4, i)),
+        );
+        await repo.setScores(p, const [PlayScore(playerName: 'Frequente')]);
+      }
+      final p = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 20)),
+      );
+      await repo.setScores(p, const [PlayScore(playerName: 'Raro')]);
+
+      final nomes = await repo.playerNames();
+      expect(nomes.indexOf('Frequente'), lessThan(nomes.indexOf('Raro')));
+    });
+
+    test('editar o placar não infla a contagem da pessoa', () async {
+      // Regravar o placar apaga e reinsere as linhas. Com um contador mantido
+      // à mão, editar cinco vezes faria a pessoa parecer que jogou seis.
+      final id = await repo.insertGame(const Game(name: 'Ark Nova'));
+      final so = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 1)),
+      );
+      final varias = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 8)),
+      );
+
+      await repo.setScores(varias, const [PlayScore(playerName: 'Duas')]);
+      await repo.setScores(so, const [PlayScore(playerName: 'Editada')]);
+      for (var i = 0; i < 5; i++) {
+        await repo.setScores(
+          so,
+          [PlayScore(playerName: 'Editada', score: i.toDouble())],
+        );
+      }
+      final outra = await repo.insertPlay(
+        Play(gameId: id, playedAt: DateTime(2026, 4, 15)),
+      );
+      await repo.setScores(outra, const [PlayScore(playerName: 'Duas')]);
+
+      // "Duas" jogou 2 partidas; "Editada", 1 — por mais que tenha sido
+      // regravada seis vezes.
+      final nomes = await repo.playerNames();
+      expect(nomes.indexOf('Duas'), lessThan(nomes.indexOf('Editada')));
+    });
+
     test('cooperativo: todo mundo pode ter vencido', () async {
       final id = await repo.insertGame(const Game(name: 'Pandemic'));
       final playId = await repo.insertPlay(

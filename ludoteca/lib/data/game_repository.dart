@@ -231,7 +231,11 @@ class GameRepository {
     return out;
   }
 
-  /// Substitui o placar de uma partida.
+  /// Substitui o placar de uma partida, e guarda quem jogou.
+  ///
+  /// As duas coisas na mesma transação: um nome que entrou no placar mas não no
+  /// cadastro não apareceria na sugestão da partida seguinte, que é justamente
+  /// para o que ele serve.
   Future<void> setScores(int playId, List<PlayScore> scores) async {
     final db = await _db;
     await db.transaction((txn) async {
@@ -245,23 +249,64 @@ class GameRepository {
           'won': s.won ? 1 : 0,
         });
       }
+      await registrarJogadores(
+        scores.map((s) => s.playerName),
+        txn: txn,
+      );
     });
   }
 
-  /// Nomes já usados, dos mais frequentes para os menos.
+  /// Com quem você joga, de quem mais joga para quem menos joga.
   ///
   /// Alimenta a sugestão ao anotar o placar: você joga quase sempre com as
   /// mesmas pessoas, e redigitar os nomes toda vez é atrito puro.
+  ///
+  /// Vem da tabela `players`, e não de um `GROUP BY` sobre as partidas, para o
+  /// nome não sumir quando você apaga a partida em que ele apareceu.
   Future<List<String>> playerNames() async {
     final db = await _db;
+    // A contagem sai de `play_scores` na hora, em vez de um contador guardado
+    // em `players`: contador mantido à mão erra na primeira edição de partida
+    // (regravar o placar somaria de novo) e o erro passa despercebido, porque
+    // ele só mexe na ordem das sugestões.
     final rows = await db.rawQuery('''
-      SELECT player_name, COUNT(*) AS total
-      FROM play_scores
-      GROUP BY player_name COLLATE NOCASE
-      ORDER BY total DESC, player_name COLLATE NOCASE
+      SELECT p.name AS name,
+             (SELECT COUNT(*) FROM play_scores s
+               WHERE s.player_name = p.name COLLATE NOCASE) AS total
+      FROM players p
+      -- Empate na frequência desempata por quem jogou mais recentemente: quem
+      -- entrou no grupo esta semana é mais provável que quem jogou duas vezes
+      -- há dois anos.
+      ORDER BY total DESC, p.last_used_at DESC, p.name COLLATE NOCASE
       LIMIT 30
     ''');
-    return rows.map((r) => r['player_name'] as String).toList();
+    return rows.map((r) => r['name'] as String).toList();
+  }
+
+  /// Guarda as pessoas que entraram numa partida.
+  ///
+  /// Idempotente por nome, sem diferenciar maiúsculas: digitar "ana" hoje e
+  /// "Ana" amanhã não cria duas pessoas. Fica valendo a grafia da primeira vez.
+  Future<void> registrarJogadores(
+    Iterable<String> nomes, {
+    DatabaseExecutor? txn,
+  }) async {
+    final db = txn ?? await _db;
+    final agora = isoData(DateTime.now());
+
+    for (final bruto in nomes) {
+      final nome = bruto.trim();
+      if (nome.isEmpty) continue;
+
+      await db.rawInsert(
+        'INSERT OR IGNORE INTO players (name, last_used_at) VALUES (?, ?)',
+        [nome, agora],
+      );
+      await db.rawUpdate(
+        'UPDATE players SET last_used_at = ? WHERE name = ? COLLATE NOCASE',
+        [agora, nome],
+      );
+    }
   }
 
   // -------------------------------------------------------------- saída
@@ -477,6 +522,11 @@ class GameRepository {
 
   /// Nome de usuário no Comparajogos, para ler as listas públicas dele.
   static const keyComparajogosUser = 'comparajogos_user';
+
+  /// As réguas dos rankings de "vale a pena?". Ausente = comparar sem régua.
+  static const keyMetaPorPartida = 'meta_por_partida';
+  static const keyMetaPorMes = 'meta_por_mes';
+  static const keyMetaPorHora = 'meta_por_hora';
 
   Future<String?> getSetting(String key) async {
     final db = await _db;

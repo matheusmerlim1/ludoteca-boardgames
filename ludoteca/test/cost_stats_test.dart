@@ -52,7 +52,64 @@ GameEntry _entrada(
   );
 }
 
+void _grupoDatas() {
+  group('custo por mês sem data de compra', () {
+    test('coleção inteira sem data: desconhecido, não zero', () {
+      // Era o que aparecia na tela: "R$ 0 por mês", que lido de boa-fé quer
+      // dizer "minha coleção não me custa nada" — o oposto do que a tela toda
+      // existe para responder.
+      final s = CostStats.compute(entries: [
+        _entrada(const Game(id: 1, name: 'Sem data', price: 500)),
+        _entrada(const Game(id: 2, name: 'Tambem sem', price: 300)),
+      ]);
+
+      expect(s.monthlyCostIsUnknown, isTrue);
+      expect(s.datedGameCount, 0);
+      expect(s.undatedGameCount, 2);
+      expect(s.totalInvested, 800);
+    });
+
+    test('só os que têm data entram na conta, e o resto é contado', () {
+      final s = CostStats.compute(entries: [
+        _entrada(_jogo(
+          id: 1,
+          name: 'Com data',
+          price: 600,
+          purchaseDate: DateTime.now().subtract(const Duration(days: 365)),
+        )),
+        _entrada(const Game(id: 2, name: 'Sem data', price: 300)),
+      ]);
+
+      expect(s.monthlyCostIsUnknown, isFalse);
+      expect(s.datedGameCount, 1);
+      expect(s.undatedGameCount, 1);
+      // 600 em ~12 meses. Nada do jogo sem data entra aqui.
+      expect(s.monthlyOwnershipCost, closeTo(50, 5));
+    });
+  });
+
+  group('rankings vêm inteiros', () {
+    test('não são cortados no top 8 — quem corta é a tela', () {
+      final entries = [
+        for (var i = 1; i <= 15; i++)
+          _entrada(
+            Game(id: i, name: 'Jogo $i', price: 100.0 * i),
+            loggedPlays: 2,
+          ),
+      ];
+
+      final s = CostStats.compute(entries: entries);
+
+      expect(s.priciestPerPlay.length, 15);
+      expect(s.cheapestPerPlay.length, 15);
+      expect(s.mostPlayed.length, 15);
+    });
+  });
+}
+
 void main() {
+  _grupoDatas();
+
   group('GameEntry', () {
     test('soma o histórico da planilha com as partidas registradas', () {
       final e = _entrada(

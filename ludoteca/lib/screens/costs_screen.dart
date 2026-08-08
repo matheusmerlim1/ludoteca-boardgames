@@ -1,16 +1,19 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../data/game_repository.dart';
 import '../stats/cost_stats.dart';
 import '../state/collection_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
 import '../widgets/donut_chart.dart';
+import '../widgets/meta_sheet.dart';
 import '../widgets/month_bar_chart.dart';
 import '../widgets/play_bubbles.dart';
 import '../widgets/play_calendar.dart';
 import '../widgets/ranked_bar_list.dart';
 import '../widgets/stat_tile.dart';
+import 'collection_screen.dart';
 import 'game_detail_screen.dart';
 
 /// Tela de custos: as quatro métricas.
@@ -33,7 +36,12 @@ enum _Aba {
 }
 
 class CostsScreen extends StatefulWidget {
-  const CostsScreen({super.key});
+  const CostsScreen({super.key, this.onVerColecao});
+
+  /// Leva para a aba da coleção. A tela de custos mostra contagens ("6 nunca
+  /// jogados") e a pergunta seguinte é sempre "quais?" — sem este caminho, a
+  /// resposta exige trocar de aba e remontar o filtro à mão.
+  final void Function()? onVerColecao;
 
   @override
   State<CostsScreen> createState() => _CostsScreenState();
@@ -118,7 +126,11 @@ class _CostsScreenState extends State<CostsScreen> {
     switch (aba) {
       case _Aba.resumo:
         return [
-          _Numeros(stats: stats),
+          _Numeros(
+            stats: stats,
+            onVerNuncaJogados:
+                stats.neverPlayedCount == 0 ? null : _verNuncaJogados,
+          ),
           const SizedBox(height: 16),
           PlayCalendar(plays: store.todasPartidas),
         ];
@@ -135,7 +147,7 @@ class _CostsScreenState extends State<CostsScreen> {
         return _abaDinheiro(stats);
 
       case _Aba.valeAPena:
-        return _abaValeAPena(stats);
+        return _abaValeAPena(stats, store);
 
       case _Aba.tempo:
         return _abaTempo(stats);
@@ -183,7 +195,7 @@ class _CostsScreenState extends State<CostsScreen> {
     ];
   }
 
-  List<Widget> _abaValeAPena(CostStats stats) {
+  List<Widget> _abaValeAPena(CostStats stats, CollectionStore store) {
     return [
             RankedBarList(
               title: _piores
@@ -196,6 +208,20 @@ class _CostsScreenState extends State<CostsScreen> {
               format: (v) => dinheiro(v),
               emptyMessage: 'Registre partidas para este ranking existir.',
               onTapGame: _abrir,
+              meta: store.metaPorPartida,
+              metaLabel: store.metaPorPartida == null
+                  ? null
+                  : 'Vale a pena até ${dinheiro(store.metaPorPartida!)} por partida',
+              onAjustarMeta: () => _ajustarMeta(
+                        chave: GameRepository.keyMetaPorPartida,
+                        atual: store.metaPorPartida,
+                        titulo: 'Quanto por partida vale a pena?',
+                        descricao: 'Acima disso o jogo aparece marcado como '
+                            'ainda não pago. Quem joga toda semana e quem joga '
+                            'uma vez por mês não usam o mesmo número.',
+                        sufixo: 'por partida',
+                        sugestoes: const [5, 10, 20, 30],
+              ),
             ),
             const SizedBox(height: 8),
             Center(
@@ -218,6 +244,19 @@ class _CostsScreenState extends State<CostsScreen> {
               format: (v) => '${dinheiro(v)}/mês',
               emptyMessage: 'Preencha a data de compra dos jogos.',
               onTapGame: _abrir,
+              meta: store.metaPorMes,
+              metaLabel: store.metaPorMes == null
+                  ? null
+                  : 'Meu teto: ${dinheiro(store.metaPorMes!)} por mês',
+              onAjustarMeta: () => _ajustarMeta(
+                        chave: GameRepository.keyMetaPorMes,
+                        atual: store.metaPorMes,
+                        titulo: 'Quanto um jogo pode custar por mês?',
+                        descricao: 'Custo de posse: o investimento diluído no '
+                            'tempo em que o jogo está com você.',
+                        sufixo: '/mês',
+                        sugestoes: const [10, 20, 50, 100],
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -232,8 +271,44 @@ class _CostsScreenState extends State<CostsScreen> {
               emptyMessage: 'Precisa de partidas registradas e de duração '
                   'cadastrada no jogo.',
               onTapGame: _abrir,
+              meta: store.metaPorHora,
+              metaLabel: store.metaPorHora == null
+                  ? null
+                  : 'Vale a pena até ${dinheiro(store.metaPorHora!)} por hora',
+              onAjustarMeta: () => _ajustarMeta(
+                        chave: GameRepository.keyMetaPorHora,
+                        atual: store.metaPorHora,
+                        titulo: 'Quanto por hora de mesa vale a pena?',
+                        descricao: 'Um bom parâmetro é o que você pagaria por '
+                            'uma hora de qualquer outro lazer.',
+                        sufixo: '/h',
+                        sugestoes: const [5, 10, 15, 25],
+              ),
             ),
     ];
+  }
+
+  Future<void> _ajustarMeta({
+    required String chave,
+    required double? atual,
+    required String titulo,
+    required String descricao,
+    required String sufixo,
+    required List<double> sugestoes,
+  }) async {
+    final store = context.read<CollectionStore>();
+    final r = await MetaSheet.show(
+      context,
+      titulo: titulo,
+      descricao: descricao,
+      sufixo: sufixo,
+      inicial: atual,
+      sugestoes: sugestoes,
+    );
+    // Fechar a folha arrastando não é "tirar a régua": só o botão é.
+    if (r == null) return;
+
+    await store.setMeta(chave, r.valor);
   }
 
   List<Widget> _abaTempo(CostStats stats) {
@@ -273,6 +348,28 @@ class _CostsScreenState extends State<CostsScreen> {
     ];
   }
 
+  /// Do número para a lista: monta o filtro e leva para a coleção.
+  ///
+  /// Ler "6 nunca jogados" e não ter como ver quais são é a parte frustrante
+  /// de um painel de números — a pergunta seguinte é sempre "quais?".
+  void _verNuncaJogados() {
+    final store = context.read<CollectionStore>();
+    store.clearFilters();
+    store.setOnlyNeverPlayed(true);
+
+    final ir = widget.onVerColecao;
+    if (ir != null) {
+      ir();
+      return;
+    }
+
+    // Sem a casca do app por perto (num teste, ou aberta como tela solta), a
+    // coleção entra empilhada — o filtro já vai aplicado do mesmo jeito.
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const CollectionScreen()),
+    );
+  }
+
   void _abrir(int gameId) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -285,9 +382,10 @@ class _CostsScreenState extends State<CostsScreen> {
 /// Os números de cabeceira. Quando a história é um número, um número é o
 /// gráfico certo — não uma pizza de duas fatias.
 class _Numeros extends StatelessWidget {
-  const _Numeros({required this.stats});
+  const _Numeros({required this.stats, this.onVerNuncaJogados});
 
   final CostStats stats;
+  final VoidCallback? onVerNuncaJogados;
 
   @override
   Widget build(BuildContext context) {
@@ -302,8 +400,20 @@ class _Numeros extends StatelessWidget {
         ),
         StatTile(
           label: 'CUSTO POR MÊS',
-          value: dinheiro(stats.monthlyOwnershipCost, casas: 0),
-          hint: 'o que a coleção custa por mês de posse',
+          // Sem nenhuma data de compra a conta não dá zero, ela não existe.
+          // Mostrar "R$ 0" aqui dizia que a coleção não custa nada — o oposto
+          // do que a tela inteira serve para responder.
+          value: stats.monthlyCostIsUnknown
+              ? '—'
+              : dinheiro(stats.monthlyOwnershipCost, casas: 0),
+          hint: switch (stats) {
+            _ when stats.monthlyCostIsUnknown =>
+              'falta a data de compra dos jogos',
+            _ when stats.undatedGameCount > 0 =>
+              'de ${stats.datedGameCount} jogos; '
+                  '${stats.undatedGameCount} sem data de compra',
+            _ => 'o que a coleção custa por mês de posse',
+          },
         ),
         StatTile(
           label: 'CUSTO MÉDIO POR PARTIDA',
@@ -343,7 +453,9 @@ class _Numeros extends StatelessWidget {
           value: '${stats.neverPlayedCount}',
           hint: stats.neverPlayedCount == 0
               ? 'tudo já foi à mesa'
-              : '${dinheiro(stats.idleValue, casas: 0)} parados na estante',
+              : '${dinheiro(stats.idleValue, casas: 0)} parados '
+                  '· toque para ver quais',
+          onTap: onVerNuncaJogados,
         ),
         if (stats.totalSleeves > 0)
           StatTile(

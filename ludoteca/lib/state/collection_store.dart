@@ -222,6 +222,7 @@ class CollectionStore extends ChangeNotifier {
       _tagFilter = _tagFilter.intersection(vivos);
       _reindexa();
       _bggToken = await _repo.getSetting(GameRepository.keyBggToken);
+      await _carregarMetas();
       _error = null;
     } catch (e) {
       _error = e;
@@ -234,6 +235,38 @@ class CollectionStore extends ChangeNotifier {
   Future<void> setBggToken(String? token) async {
     await _repo.setSetting(GameRepository.keyBggToken, token);
     _bggToken = (token == null || token.trim().isEmpty) ? null : token.trim();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------- réguas do "vale a pena?"
+
+  /// Quanto você aceita pagar por partida, por mês de posse e por hora de mesa.
+  ///
+  /// Nulo = sem régua; os rankings voltam a comparar os jogos só entre si.
+  /// Ficam aqui, e não na tela de custos, porque ler o banco no `initState` de
+  /// uma tela cria I/O fora do ciclo de carga do app — e, em teste, um future
+  /// que nasce na zona de tempo falso nunca completa.
+  final Map<String, double?> _metas = {};
+
+  double? get metaPorPartida => _metas[GameRepository.keyMetaPorPartida];
+  double? get metaPorMes => _metas[GameRepository.keyMetaPorMes];
+  double? get metaPorHora => _metas[GameRepository.keyMetaPorHora];
+
+  static const _chavesDeMeta = [
+    GameRepository.keyMetaPorPartida,
+    GameRepository.keyMetaPorMes,
+    GameRepository.keyMetaPorHora,
+  ];
+
+  Future<void> _carregarMetas() async {
+    for (final chave in _chavesDeMeta) {
+      _metas[chave] = double.tryParse(await _repo.getSetting(chave) ?? '');
+    }
+  }
+
+  Future<void> setMeta(String chave, double? valor) async {
+    await _repo.setSetting(chave, valor?.toString());
+    _metas[chave] = valor;
     notifyListeners();
   }
 

@@ -377,9 +377,15 @@ class _AddGameScreenState extends State<AddGameScreen> {
 
     if (!mounted) return;
 
-    // Salvou o jogo-base e o BGG conhece expansões dele: oferece a lista.
+    // Salvou o jogo-base e o catálogo conhece expansões dele: oferece a lista.
     // Nada entra sem marcação — ver ExpansionPickerSheet.
-    if (novoId != null && detalhes.expansions.isNotEmpty) {
+    //
+    // Não vale para jogo de outra pessoa: você não tem a caixa, então não tem
+    // as expansões dela, e perguntar isso no caminho de "registrar a partida
+    // que acabei de jogar" só atrapalha.
+    if (novoId != null &&
+        detalhes.expansions.isNotEmpty &&
+        widget.ownershipInicial != Ownership.jogada) {
       await _oferecerExpansoes(novoId, detalhes);
     }
 

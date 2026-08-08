@@ -605,6 +605,112 @@ void main() {
     });
   });
 
+  group('rankings de custo', () {
+    /// Doze jogos com preço e partidas, para o ranking passar das 8 linhas.
+    Future<void> abreValeAPena(WidgetTester tester) async {
+      await tester.runAsync(() async {
+        _temp = await Directory.systemTemp.createTemp('ludoteca_ranking');
+        _db = AppDatabase.paraArquivo('${_temp.path}/t.db');
+        final repo = GameRepository(database: _db);
+
+        for (var i = 1; i <= 12; i++) {
+          final id = await repo.insertGame(
+            Game(name: 'Jogo $i', price: 100.0 * i),
+          );
+          await repo.insertPlay(
+            Play(gameId: id, playedAt: DateTime(2026, 4, 10)),
+          );
+        }
+
+        _store = CollectionStore(repository: repo);
+        await _store.load();
+      });
+      addTearDown(() => _limpa(tester));
+
+      await _renderiza(
+        tester,
+        const CostsScreen(),
+        brilho: Brightness.light,
+        // Largo o bastante para a faixa de abas caber inteira: aqui o alvo é o
+        // ranking, e o teste de tela estreita já existe à parte.
+        tamanho: const Size(900, 2200),
+      );
+      await _vaiParaAba(tester, 'Vale a pena?');
+    }
+
+    testWidgets('mostra 8 linhas e oferece ver todas', (tester) async {
+      await abreValeAPena(tester);
+
+      // O topo do ranking aparece; o fim fica atrás do botão.
+      expect(find.text('Jogo 12'), findsOneWidget);
+      expect(find.text('Jogo 1'), findsNothing);
+      expect(find.text('Ver todos os 12'), findsWidgets);
+    });
+
+    testWidgets('"ver todos" traz o resto da lista', (tester) async {
+      await abreValeAPena(tester);
+
+      await tester.tap(find.text('Ver todos os 12').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Jogo 1'), findsOneWidget);
+      expect(find.text('Mostrar menos'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('"mostrar menos" recolhe de volta', (tester) async {
+      await abreValeAPena(tester);
+
+      await tester.tap(find.text('Ver todos os 12').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mostrar menos').first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Jogo 1'), findsNothing);
+    });
+
+    testWidgets('sem régua, nenhum jogo é marcado como fora', (tester) async {
+      await abreValeAPena(tester);
+      // A faixa da régua só existe quando você escolheu uma.
+      expect(find.textContaining('de 12'), findsNothing);
+    });
+
+    testWidgets('com régua, a faixa diz quantos passam', (tester) async {
+      await abreValeAPena(tester);
+
+      // 12 jogos de R$ 100 a R$ 1200, uma partida cada: com a régua em
+      // R$ 500 por partida, só os cinco primeiros passam.
+      await tester.runAsync(
+        () => _store.setMeta(GameRepository.keyMetaPorPartida, 500),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('R\$ 500,00 por partida'), findsOneWidget);
+      expect(find.text('5 de 12'), findsOneWidget);
+    });
+  });
+
+  group('do número para a lista', () {
+    testWidgets('"Nunca jogados" leva à coleção já filtrada', (tester) async {
+      await _montaStore(tester, comDados: true);
+
+      var foiParaColecao = false;
+      await _renderiza(
+        tester,
+        CostsScreen(onVerColecao: () => foiParaColecao = true),
+        brilho: Brightness.light,
+        tamanho: const Size(400, 1400),
+      );
+
+      await tester.tap(find.text('NUNCA JOGADOS'));
+      await tester.pumpAndSettle();
+
+      expect(foiParaColecao, isTrue);
+      // Ler "quantos" e não conseguir ver "quais" era o beco sem saída.
+      expect(_store.onlyNeverPlayed, isTrue);
+    });
+  });
+
   group('tempo sem jogar', () {
     /// Três jogos com datas diferentes de última partida.
     ///
