@@ -10,9 +10,11 @@ import 'package:ludoteca/models/play_score.dart';
 import 'package:ludoteca/screens/collection_screen.dart';
 import 'package:ludoteca/screens/costs_screen.dart';
 import 'package:ludoteca/screens/game_detail_screen.dart';
+import 'package:ludoteca/screens/game_form_screen.dart';
 import 'package:ludoteca/screens/settings_screen.dart';
 import 'package:ludoteca/services/share_service.dart';
 import 'package:ludoteca/state/collection_store.dart';
+import 'package:ludoteca/utils/format.dart';
 import 'package:ludoteca/widgets/game_card.dart';
 import 'package:ludoteca/widgets/pick_game_sheet.dart';
 import 'package:ludoteca/theme.dart';
@@ -687,6 +689,58 @@ void main() {
 
       expect(find.textContaining('R\$ 500,00 por partida'), findsOneWidget);
       expect(find.text('5 de 12'), findsOneWidget);
+    });
+  });
+
+  group('data de compra do jogo novo', () {
+    /// Abre o formulário de cadastro vazio.
+    Future<void> abreCadastro(WidgetTester tester) async {
+      await _montaStore(tester);
+      await _renderiza(
+        tester,
+        const GameFormScreen(),
+        brilho: Brightness.light,
+        tamanho: const Size(400, 2400),
+      );
+    }
+
+    testWidgets('vem preenchida com hoje', (tester) async {
+      // Sem isto, cadastrar um jogo comprado hoje deixava a data vazia — e a
+      // tela de custos mostrava "—" no custo por mês sem nada parecer errado
+      // no cadastro.
+      await abreCadastro(tester);
+
+      expect(find.text(data(DateTime.now())), findsWidgets);
+    });
+
+    testWidgets('some ao marcar que o jogo não é seu', (tester) async {
+      await abreCadastro(tester);
+
+      await tester.tap(find.text('Só joguei'));
+      await tester.pumpAndSettle();
+
+      // O grupo de custos inteiro sai: o dinheiro não é seu.
+      expect(find.text('Custos'), findsNothing);
+      expect(find.text('Preço pago pela caixa'), findsNothing);
+    });
+
+    testWidgets('editar um jogo antigo não inventa data', (tester) async {
+      // Os jogos que vieram da planilha não têm data, e abrir a ficha de um
+      // deles não pode carimbar a data de hoje neles.
+      await _montaStore(tester, comDados: true);
+      final antigo = _store.allEntries
+          .firstWhere((e) => e.game.name == 'Wingspan')
+          .game;
+
+      await _renderiza(
+        tester,
+        GameFormScreen(existing: antigo),
+        brilho: Brightness.light,
+        tamanho: const Size(400, 2400),
+      );
+
+      expect(find.text(data(DateTime.now())), findsNothing);
+      expect(find.text(data(DateTime(2024, 8, 3))), findsWidgets);
     });
   });
 

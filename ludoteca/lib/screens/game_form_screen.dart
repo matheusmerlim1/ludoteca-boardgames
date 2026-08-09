@@ -109,11 +109,22 @@ class _GameFormScreenState extends State<GameFormScreen> {
     );
     _notes = TextEditingController(text: g?.notes ?? '');
 
-    _purchaseDate = g?.purchaseDate;
-    _manualLastPlayed = g?.manualLastPlayed;
     _linkKind = g?.linkKind ?? ((b?.isExpansion ?? false) ? LinkKind.expansao : null);
     _parentId = g?.parentId;
     _ownership = g?.ownership ?? widget.ownershipInicial ?? Ownership.propria;
+
+    // Jogo novo entra com a data de hoje. Quem cadastra um jogo acabou de
+    // comprá-lo na esmagadora maioria das vezes, e deixar o campo vazio custava
+    // caro de um jeito que não aparecia na hora: sem data não existe custo por
+    // mês, e a tela de custos mostrava "—" sem que nada parecesse errado no
+    // cadastro. Comprou antes? A data está logo ali, editável.
+    //
+    // Só para o que é seu: jogo de outra pessoa e jogo desejado não têm data de
+    // compra, e inventar uma criaria custo de posse de dinheiro que não saiu.
+    final novoEMeu = g == null && _ownership == Ownership.propria;
+    _purchaseDate = g?.purchaseDate ?? (novoEMeu ? soData(DateTime.now()) : null);
+
+    _manualLastPlayed = g?.manualLastPlayed;
 
     _imageUrl = g?.imageUrl ?? b?.imageUrl;
     _thumbUrl = g?.thumbUrl ?? b?.thumbUrl;
@@ -574,7 +585,10 @@ class _GameFormScreenState extends State<GameFormScreen> {
       price: parseMoedaOuZero(_price.text),
       sleeveCost: parseMoedaOuZero(_sleeves.text),
       accessoryCost: parseMoedaOuZero(_accessories.text),
-      purchaseDate: _purchaseDate,
+      // Jogo que não é seu não tem data de compra: os campos de custo nem
+      // aparecem para ele, e uma data sobrando aqui viria da data padrão de
+      // "jogo novo" que ficou no estado depois de você trocar o tipo.
+      purchaseDate: _ownership == Ownership.propria ? _purchaseDate : null,
       manualPlayCount: parseInteiro(_manualPlays.text) ?? 0,
       manualLastPlayed: _manualLastPlayed,
       // Venda é gerenciada na tela de detalhe, não aqui — preservar o que já
