@@ -16,6 +16,7 @@ import 'package:ludoteca/services/share_service.dart';
 import 'package:ludoteca/state/collection_store.dart';
 import 'package:ludoteca/utils/format.dart';
 import 'package:ludoteca/widgets/game_card.dart';
+import 'package:ludoteca/widgets/month_spend_sheet.dart';
 import 'package:ludoteca/widgets/pick_game_sheet.dart';
 import 'package:ludoteca/theme.dart';
 import 'package:provider/provider.dart';
@@ -689,6 +690,123 @@ void main() {
 
       expect(find.textContaining('R\$ 500,00 por partida'), findsOneWidget);
       expect(find.text('5 de 12'), findsOneWidget);
+    });
+  });
+
+  group('do total do mês para as compras', () {
+    /// Duas compras em março e uma em junho, mais um jogo sem data.
+    Future<void> abreCustos(WidgetTester tester) async {
+      await tester.runAsync(() async {
+        _temp = await Directory.systemTemp.createTemp('ludoteca_mes');
+        _db = AppDatabase.paraArquivo('${_temp.path}/t.db');
+        final repo = GameRepository(database: _db);
+
+        await repo.insertGame(Game(
+          name: 'Caro de março',
+          price: 800,
+          sleeveCost: 50,
+          purchaseDate: DateTime(2026, 3, 4),
+        ));
+        await repo.insertGame(Game(
+          name: 'Barato de março',
+          price: 120,
+          purchaseDate: DateTime(2026, 3, 20),
+        ));
+        await repo.insertGame(Game(
+          name: 'De junho',
+          price: 300,
+          purchaseDate: DateTime(2026, 6, 10),
+        ));
+        await repo.insertGame(const Game(name: 'Sem data', price: 999));
+
+        _store = CollectionStore(repository: repo);
+        await _store.load();
+      });
+      addTearDown(() => _limpa(tester));
+
+      await _renderiza(
+        tester,
+        const CostsScreen(),
+        brilho: Brightness.light,
+        tamanho: const Size(900, 1600),
+      );
+    }
+
+    testWidgets('o cartão de custo por mês abre as compras', (tester) async {
+      await abreCustos(tester);
+
+      await tester.tap(find.text('CUSTO POR MÊS'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MonthSpendSheet), findsOneWidget);
+    });
+
+    testWidgets('lista os itens do mês, do mais caro para o mais barato',
+        (tester) async {
+      await abreCustos(tester);
+      await tester.tap(find.text('CUSTO POR MÊS'));
+      await tester.pumpAndSettle();
+
+      // Abre em junho (o mês com compra mais próximo de hoje não existe, então
+      // cai no mais próximo) e navega até março.
+      while (find.text('março de 2026').evaluate().isEmpty) {
+        await tester.tap(find.byIcon(Icons.chevron_left));
+        await tester.pumpAndSettle();
+      }
+
+      final nomes = tester
+          .widgetList<Text>(find.descendant(
+            of: find.byType(MonthSpendSheet),
+            matching: find.byType(Text),
+          ))
+          .map((t) => t.data)
+          .whereType<String>()
+          .toList();
+
+      expect(nomes, contains('Caro de março'));
+      expect(nomes, contains('Barato de março'));
+      // R$ 850 (800 + 50 de sleeves) vem antes de R$ 120.
+      expect(
+        nomes.indexOf('Caro de março'),
+        lessThan(nomes.indexOf('Barato de março')),
+      );
+      // Junho não se mistura com março.
+      expect(nomes, isNot(contains('De junho')));
+      // Jogo sem data de compra não aparece em mês nenhum.
+      expect(nomes, isNot(contains('Sem data')));
+    });
+
+    testWidgets('soma o mês com os extras, não só a caixa', (tester) async {
+      await abreCustos(tester);
+      await tester.tap(find.text('CUSTO POR MÊS'));
+      await tester.pumpAndSettle();
+
+      while (find.text('março de 2026').evaluate().isEmpty) {
+        await tester.tap(find.byIcon(Icons.chevron_left));
+        await tester.pumpAndSettle();
+      }
+
+      // 800 + 50 + 120 = 970.
+      expect(find.textContaining('R\$ 970,00'), findsWidgets);
+      expect(find.textContaining('sleeves'), findsWidgets);
+    });
+
+    testWidgets('pula os meses sem compra', (tester) async {
+      await abreCustos(tester);
+      await tester.tap(find.text('CUSTO POR MÊS'));
+      await tester.pumpAndSettle();
+
+      while (find.text('março de 2026').evaluate().isEmpty) {
+        await tester.tap(find.byIcon(Icons.chevron_left));
+        await tester.pumpAndSettle();
+      }
+
+      // De março, um toque para a frente cai em junho: abril e maio não têm
+      // compra e passar por eles em branco seria navegação inútil.
+      await tester.tap(find.byIcon(Icons.chevron_right));
+      await tester.pumpAndSettle();
+
+      expect(find.text('junho de 2026'), findsOneWidget);
     });
   });
 

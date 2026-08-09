@@ -9,6 +9,7 @@ import '../utils/format.dart';
 import '../widgets/donut_chart.dart';
 import '../widgets/meta_sheet.dart';
 import '../widgets/month_bar_chart.dart';
+import '../widgets/month_spend_sheet.dart';
 import '../widgets/play_bubbles.dart';
 import '../widgets/play_calendar.dart';
 import '../widgets/ranked_bar_list.dart';
@@ -130,6 +131,7 @@ class _CostsScreenState extends State<CostsScreen> {
             stats: stats,
             onVerNuncaJogados:
                 stats.neverPlayedCount == 0 ? null : _verNuncaJogados,
+            onVerGastoDoMes: () => _verGastoDoMes(store),
           ),
           const SizedBox(height: 16),
           PlayCalendar(plays: store.todasPartidas),
@@ -144,7 +146,7 @@ class _CostsScreenState extends State<CostsScreen> {
         ];
 
       case _Aba.dinheiro:
-        return _abaDinheiro(stats);
+        return _abaDinheiro(stats, store);
 
       case _Aba.valeAPena:
         return _abaValeAPena(stats, store);
@@ -154,7 +156,7 @@ class _CostsScreenState extends State<CostsScreen> {
     }
   }
 
-  List<Widget> _abaDinheiro(CostStats stats) {
+  List<Widget> _abaDinheiro(CostStats stats, CollectionStore store) {
     return [
             // Pizza 1 — onde o dinheiro está. Máximo 6 fatias: a cauda já vem
             // dobrada em "Outros" do cálculo.
@@ -189,8 +191,15 @@ class _CostsScreenState extends State<CostsScreen> {
             MonthBarChart(
               title: 'Quanto você gastou por mês',
               subtitle: 'Pela data de compra. Inclui jogos já vendidos — '
-                  'o dinheiro saiu do bolso na época.',
+                  'o dinheiro saiu do bolso na época. Toque duas vezes numa '
+                  'barra para ver o que foi comprado.',
               data: stats.monthlySpend,
+              onAbrirMes: (mes) => MonthSpendSheet.show(
+                context,
+                entries: store.allEntries,
+                mesInicial: mes,
+                onAbrirJogo: _abrir,
+              ),
             ),
     ];
   }
@@ -370,6 +379,22 @@ class _CostsScreenState extends State<CostsScreen> {
     );
   }
 
+  /// Do total do mês para as compras que o formaram.
+  ///
+  /// Vale reparar que são grandezas diferentes: o cartão mostra **custo de
+  /// posse** (o investimento diluído nos meses em que o jogo é seu), e a folha
+  /// mostra **gasto** (o que saiu do bolso naquele mês). A pergunta que leva de
+  /// um ao outro — "de onde vem esse número?" — é a mesma, então o caminho
+  /// existe; a folha diz no cabeçalho o que está somando.
+  Future<void> _verGastoDoMes(CollectionStore store) {
+    return MonthSpendSheet.show(
+      context,
+      entries: store.allEntries,
+      mesInicial: DateTime.now(),
+      onAbrirJogo: _abrir,
+    );
+  }
+
   void _abrir(int gameId) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -382,10 +407,15 @@ class _CostsScreenState extends State<CostsScreen> {
 /// Os números de cabeceira. Quando a história é um número, um número é o
 /// gráfico certo — não uma pizza de duas fatias.
 class _Numeros extends StatelessWidget {
-  const _Numeros({required this.stats, this.onVerNuncaJogados});
+  const _Numeros({
+    required this.stats,
+    this.onVerNuncaJogados,
+    this.onVerGastoDoMes,
+  });
 
   final CostStats stats;
   final VoidCallback? onVerNuncaJogados;
+  final VoidCallback? onVerGastoDoMes;
 
   @override
   Widget build(BuildContext context) {
@@ -408,12 +438,13 @@ class _Numeros extends StatelessWidget {
               : dinheiro(stats.monthlyOwnershipCost, casas: 0),
           hint: switch (stats) {
             _ when stats.monthlyCostIsUnknown =>
-              'falta a data de compra dos jogos',
+              'falta a data de compra · toque para ver as compras',
             _ when stats.undatedGameCount > 0 =>
               'de ${stats.datedGameCount} jogos; '
-                  '${stats.undatedGameCount} sem data de compra',
-            _ => 'o que a coleção custa por mês de posse',
+                  '${stats.undatedGameCount} sem data · toque para ver o mês',
+            _ => 'custo de posse · toque para ver o que comprou no mês',
           },
+          onTap: onVerGastoDoMes,
         ),
         StatTile(
           label: 'CUSTO MÉDIO POR PARTIDA',

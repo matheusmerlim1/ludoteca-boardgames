@@ -22,12 +22,20 @@ class MonthBarChart extends StatefulWidget {
     required this.title,
     this.subtitle,
     this.plotHeight = 150,
+    this.onAbrirMes,
   });
 
   final List<MonthSpend> data;
   final String title;
   final String? subtitle;
   final double plotHeight;
+
+  /// Segundo toque na mesma barra: mostra o que foi comprado naquele mês.
+  ///
+  /// O primeiro toque só seleciona, porque a leitura acima do gráfico já é a
+  /// resposta na maioria das vezes — abrir uma folha a cada toque cobraria uma
+  /// interação de quem só queria comparar duas barras.
+  final void Function(DateTime mes)? onAbrirMes;
 
   @override
   State<MonthBarChart> createState() => _MonthBarChartState();
@@ -149,9 +157,15 @@ class _MonthBarChartState extends State<MonthBarChart> {
                                   showYear: i == 0 ||
                                       data[i].month.year !=
                                           data[i - 1].month.year,
-                                  onTap: () => setState(
-                                    () => _selected = _selected == i ? null : i,
-                                  ),
+                                  onTap: () {
+                                    if (_selected == i &&
+                                        widget.onAbrirMes != null &&
+                                        data[i].total > 0) {
+                                      widget.onAbrirMes!(data[i].month);
+                                      return;
+                                    }
+                                    setState(() => _selected = i);
+                                  },
                                 ),
                             ],
                           ),
