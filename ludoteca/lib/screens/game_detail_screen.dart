@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/game.dart';
 import '../models/play.dart';
 import '../models/play_score.dart';
+import '../models/trade.dart';
 import '../services/comparajogos_service.dart';
 import '../services/game_catalog.dart';
 import '../state/collection_store.dart';
@@ -34,10 +35,15 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
   bool _loadingPlays = true;
   bool _buscandoItens = false;
 
+  /// A troca de que este jogo participou, quando houver. Explica na ficha um
+  /// preço que o usuário nunca digitou.
+  Trade? _trade;
+
   @override
   void initState() {
     super.initState();
     _carregarPartidas();
+    _carregarTroca();
   }
 
   Future<void> _carregarPartidas() async {
@@ -52,6 +58,11 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       _placares = placares;
       _loadingPlays = false;
     });
+  }
+
+  Future<void> _carregarTroca() async {
+    final t = await context.read<CollectionStore>().tradeDeJogo(widget.gameId);
+    if (mounted) setState(() => _trade = t);
   }
 
   @override
@@ -90,6 +101,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
               _MoreMenu(
                 game: game,
                 onSaida: () => _registrarSaida(game),
+                onCorrigir: () => _corrigirSaida(game),
                 onRemover: () => _remover(game),
               ),
             ],
@@ -107,12 +119,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                   onRegistrar: () => _registrarPartida(game),
                 ),
                 const SizedBox(height: 20),
-                _BlocoCustos(
-                  entry: entry,
-                  trocadoPor: game.tradedForId == null
-                      ? null
-                      : store.entryById(game.tradedForId!)?.displayName,
-                ),
+                _BlocoCustos(entry: entry, trade: _trade),
                 const SizedBox(height: 20),
                 _BlocoExpansoes(
                   expansoes: expansoes,
@@ -166,17 +173,25 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     );
     if (r == null || !mounted) return;
 
-    await context.read<CollectionStore>().logPlay(r.play, placar: r.placar);
+    final store = context.read<CollectionStore>();
+    final playId = await store.logPlay(r.play, placar: r.placar);
     if (!mounted) return;
 
     // Volta para a coleção: registrar partida é o fim da tarefa, e ficar na
     // ficha faria você tocar em "voltar" toda vez. O aviso aparece já na lista,
     // que é para onde você estava indo de qualquer jeito.
+    final messenger = ScaffoldMessenger.of(context);
     Navigator.of(context).pop();
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Partida de ${data(r.play.playedAt)} registrada.')),
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Partida de ${data(r.play.playedAt)} registrada.'),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'Desfazer',
+          onPressed: () => store.deletePlay(playId),
+        ),
+      ),
     );
   }
 
@@ -334,54 +349,92 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     final store = context.read<CollectionStore>();
 
     if (game.isGone) {
-      await store.desfazerSaida(game);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Jogo de volta para a estante.')),
-      );
+      await _desfazerSaida(game);
       return;
     }
 
-    // Candidatos à troca: o que já está na estante, menos ele mesmo e menos
-    // o que também já saiu.
-    final candidatos = store.allEntries
-        .where((e) =>
-            e.game.id != game.id && !e.game.isGone && !e.game.isWishlist)
-        .toList();
-
-    final r = await DisposalSheet.show(
-      context,
-      game: game,
-      candidatos: candidatos,
-    );
+    final r = await DisposalSheet.show(context, game: game);
     if (r == null || !mounted) return;
 
-    await store.registrarSaida(
-      jogo: game,
-      tipo: r.tipo,
-      valorRecebido: r.valor,
-      quando: r.quando,
-      trocadoPorId: r.trocadoPorId,
-    );
+    if (r.tipo == Disposal.trocado) {
+      await store.registrarTroca(
+        saindo: r.saindo,
+        entrando: r.entrando,
+        quando: r.quando,
+      );
+    } else {
+      await store.registrarSaida(
+        jogo: game,
+        tipo: r.tipo,
+        valorRecebido: r.valor,
+        quando: r.quando,
+      );
+    }
 
     if (!mounted) return;
+    await _carregarTroca();
+    if (!mounted) return;
 
-    final recebido = r.trocadoPorId == null
-        ? null
-        : store.entryById(r.trocadoPorId!)?.displayName;
+    final recebidos = r.entrando
+        .map((e) => store.entryById(e.gameId)?.displayName)
+        .whereType<String>()
+        .toList();
+    final saiuTotal = r.saindo.fold(0.0, (s, g) => s + g.totalInvested);
 
+    _avisoComDesfazer(
+      switch (r.tipo) {
+        Disposal.vendido =>
+          'Vendido por ${dinheiro(r.valor ?? 0)} — abatido dos custos.',
+        Disposal.trocado when recebidos.isEmpty =>
+          'Trocado. O valor fica esperando o jogo que entrou.',
+        Disposal.trocado =>
+          '${dinheiro(saiuTotal)} passaram para ${_lista(recebidos)}.',
+        Disposal.doado => 'Marcado como doado.',
+      },
+      // Uma troca registrada errada — sem apontar o que entrou, ou com o jogo
+      // errado — não tem por que virar um problema para consertar depois.
+      onDesfazer: () => _desfazerSaida(game, silencioso: true),
+    );
+  }
+
+  Future<void> _desfazerSaida(Game game, {bool silencioso = false}) async {
+    await context.read<CollectionStore>().desfazerSaida(game);
+    if (!mounted) return;
+    await _carregarTroca();
+    if (!mounted || silencioso) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Jogo de volta para a estante.')),
+    );
+  }
+
+  /// Desfaz a troca e reabre a folha, já com a estante como estava.
+  ///
+  /// É o caminho de quem marcou "troquei" sem ter o jogo novo cadastrado:
+  /// agora dá para cadastrar na hora, e corrigir não exige entender que
+  /// "desfazer" e "marcar de novo" são dois passos.
+  Future<void> _corrigirSaida(Game game) async {
+    await _desfazerSaida(game, silencioso: true);
+    if (!mounted) return;
+
+    final atual = context.read<CollectionStore>().entryById(widget.gameId);
+    if (atual == null) return;
+    await _registrarSaida(atual.game);
+  }
+
+  void _avisoComDesfazer(String msg, {required VoidCallback onDesfazer}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(switch (r.tipo) {
-          Disposal.vendido =>
-            'Vendido por ${dinheiro(r.valor ?? 0)} — abatido dos custos.',
-          Disposal.trocado when recebido != null =>
-            '${dinheiro(game.totalInvested)} passaram para $recebido.',
-          Disposal.trocado => 'Marcado como trocado.',
-          Disposal.doado => 'Marcado como doado.',
-        }),
+        content: Text(msg),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(label: 'Desfazer', onPressed: onDesfazer),
       ),
     );
+  }
+
+  static String _lista(List<String> nomes) {
+    if (nomes.length == 1) return nomes.first;
+    return '${nomes.take(nomes.length - 1).join(', ')} e ${nomes.last}';
   }
 
   Future<void> _remover(Game game) async {
@@ -866,23 +919,49 @@ class _Placar extends StatelessWidget {
 // -------------------------------------------------------------------- custos
 
 class _BlocoCustos extends StatelessWidget {
-  const _BlocoCustos({required this.entry, this.trocadoPor});
+  const _BlocoCustos({required this.entry, this.trade});
 
   final GameEntry entry;
 
-  /// Nome do jogo que entrou na troca, quando este saiu por troca.
-  final String? trocadoPor;
+  /// A troca de que este jogo participou, de qualquer lado.
+  final Trade? trade;
+
+  /// Nomes dos jogos que entraram no lugar deste.
+  List<String> get _viraram =>
+      [for (final p in trade?.entrou ?? const []) p.nome];
+
+  /// Quando este jogo **chegou** numa troca: quem pagou por ele.
+  ///
+  /// Explica um preço que o usuário nunca digitou. Sem esta linha, o jogo
+  /// aparece com um valor que parece ter saído do nada.
+  TradeParte? get _minhaParte {
+    final t = trade;
+    if (t == null) return null;
+    for (final p in t.entrou) {
+      if (p.gameId == entry.id) return p;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
     final game = entry.game;
     final viz = context.viz;
+    final veioDaTroca = _minhaParte;
 
     return _Secao(
       titulo: 'Custos',
       child: Column(
         children: [
-          _LinhaValor(rotulo: 'Caixa do jogo', valor: dinheiro(game.price)),
+          _LinhaValor(
+            rotulo: 'Caixa do jogo',
+            valor: dinheiro(game.price),
+            nota: veioDaTroca == null
+                ? null
+                : 'veio da troca de '
+                    '${trade!.saiu.map((p) => p.nome).join(', ')}'
+                    '${trade!.entrou.length > 1 ? ' — sua parte do valor' : ''}',
+          ),
           if (game.sleeveCost > 0)
             _LinhaValor(rotulo: 'Sleeves', valor: dinheiro(game.sleeveCost)),
           if (game.accessoryCost > 0)
@@ -918,9 +997,12 @@ class _BlocoCustos extends StatelessWidget {
           ] else if (game.disposal == Disposal.trocado)
             _LinhaValor(
               rotulo: 'Trocado',
-              valor: trocadoPor == null
+              valor: _viraram.isEmpty
                   ? 'valor transferido'
-                  : 'virou $trocadoPor',
+                  : 'virou ${_viraram.join(', ')}',
+              nota: _viraram.length > 1
+                  ? 'o valor se dividiu entre ${_viraram.length} jogos'
+                  : null,
             )
           else if (game.disposal == Disposal.doado)
             const _LinhaValor(rotulo: 'Doado', valor: 'sem retorno'),
@@ -1191,11 +1273,13 @@ class _MoreMenu extends StatelessWidget {
   const _MoreMenu({
     required this.game,
     required this.onSaida,
+    required this.onCorrigir,
     required this.onRemover,
   });
 
   final Game game;
   final VoidCallback onSaida;
+  final VoidCallback onCorrigir;
   final VoidCallback onRemover;
 
   @override
@@ -1205,6 +1289,7 @@ class _MoreMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       onSelected: (v) {
         if (v == 'saida') onSaida();
+        if (v == 'corrigir') onCorrigir();
         if (v == 'remover') onRemover();
       },
       itemBuilder: (_) => [
@@ -1212,10 +1297,17 @@ class _MoreMenu extends StatelessWidget {
           value: 'saida',
           child: Text(
             game.isGone
-                ? 'Voltou para a estante'
+                ? 'Desfazer a saída — voltou para a estante'
                 : 'Saiu da coleção (vendi, troquei, doei)',
           ),
         ),
+        // Quem marcou a saída sem apontar o que entrou não precisa descobrir
+        // sozinho que o conserto é desfazer e marcar de novo.
+        if (game.isGone)
+          const PopupMenuItem(
+            value: 'corrigir',
+            child: Text('Corrigir esta saída'),
+          ),
         PopupMenuItem(
           value: 'remover',
           child: Text('Apagar da coleção',

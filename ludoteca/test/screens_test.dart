@@ -48,12 +48,14 @@ Future<void> _montaStore(
   bool comDados = false,
   String? token,
   bool comAcento = false,
+  bool comCapas = false,
 }) async {
   await tester.runAsync(
     () => _montaStoreReal(
       comDados: comDados,
       token: token,
       comAcento: comAcento,
+      comCapas: comCapas,
     ),
   );
   // Emparelhado com o setup, para a limpeza acontecer mesmo se o teste falhar.
@@ -64,15 +66,22 @@ Future<void> _montaStoreReal({
   bool comDados = false,
   String? token,
   bool comAcento = false,
+  bool comCapas = false,
 }) async {
   _temp = await Directory.systemTemp.createTemp('ludoteca_screens');
   _db = AppDatabase.paraArquivo('${_temp.path}/t.db');
   final repo = GameRepository(database: _db);
 
+  // Endereço qualquer: em teste nenhuma imagem é baixada de verdade. O que
+  // importa é a coluna estar preenchida — é ela que decide se a faixa de
+  // "jogos sem capa" aparece.
+  final capa = comCapas ? 'https://exemplo.invalid/capa.png' : null;
+
   if (comDados) {
     final base = await repo.insertGame(Game(
       name: 'Gloomhaven',
       namePt: 'Gloomhaven',
+      thumbUrl: capa,
       minPlayers: 1,
       maxPlayers: 4,
       bestPlayers: 3,
@@ -91,6 +100,7 @@ Future<void> _montaStoreReal({
       name: 'Gloomhaven: Forgotten Circles',
       linkKind: LinkKind.expansao,
       parentId: base,
+      thumbUrl: capa,
       price: 180,
       purchaseDate: DateTime(2024, 1, 20),
     ));
@@ -101,6 +111,7 @@ Future<void> _montaStoreReal({
       maxPlayers: 5,
       minPlaytime: 40,
       maxPlaytime: 70,
+      thumbUrl: capa,
       price: 320,
       purchaseDate: DateTime(2024, 8, 3),
     ));
@@ -110,6 +121,7 @@ Future<void> _montaStoreReal({
       name: 'Scythe',
       minPlayers: 1,
       maxPlayers: 5,
+      thumbUrl: capa,
       price: 450,
       purchaseDate: DateTime(2022, 11, 2),
       sold: true,
@@ -132,10 +144,11 @@ Future<void> _montaStoreReal({
 
   if (comAcento) {
     // Nome com acento e pontuação, para exercitar a busca branda.
-    await repo.insertGame(const Game(
+    await repo.insertGame(Game(
       name: 'Caçadores da Galáxia',
       minPlayers: 2,
       maxPlayers: 4,
+      thumbUrl: capa,
       price: 250,
     ));
   }
@@ -203,6 +216,15 @@ void main() {
 
         expect(find.text('Token do BGG'), findsOneWidget);
         expect(find.text('não configurado'), findsOneWidget);
+        expect(find.text('Sugestões de melhoria'), findsOneWidget);
+
+        // A tela é uma lista: o que está abaixo da dobra só existe depois de
+        // rolar até lá.
+        await tester.dragUntilVisible(
+          find.text('Backup'),
+          find.byType(ListView),
+          const Offset(0, -220),
+        );
         expect(find.text('Backup'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
@@ -412,6 +434,44 @@ void main() {
     });
   });
 
+  group('atualizar tudo', () {
+    testWidgets('o ⟳ abre uma folha com as três tarefas', (tester) async {
+      // As três moravam em três telas diferentes. O ponto desta folha é
+      // existir um lugar só para "deixar o app em dia".
+      await _montaStore(tester, comDados: true);
+      await _renderiza(tester, const CollectionScreen(),
+          brilho: Brightness.light);
+
+      await tester.tap(find.byIcon(Icons.sync));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Atualizar tudo'), findsWidgets);
+      expect(find.text('Capas e temas que faltam'), findsOneWidget);
+      expect(find.text('Preços da lista de desejos'), findsOneWidget);
+      expect(find.text('Sua coleção no Comparajogos'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a faixa de capas some quando todos os jogos têm imagem',
+        (tester) async {
+      await _montaStore(tester, comDados: true, comCapas: true);
+      await _renderiza(tester, const CollectionScreen(),
+          brilho: Brightness.light);
+
+      expect(find.textContaining('sem capa'), findsNothing);
+    });
+
+    testWidgets('sem capa, a faixa oferece buscar', (tester) async {
+      await _montaStore(tester, comDados: true);
+      await _renderiza(tester, const CollectionScreen(),
+          brilho: Brightness.light);
+
+      // O número é o que transforma "que feio isso" em "ah, é só isso".
+      expect(find.textContaining('sem capa'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Buscar'), findsOneWidget);
+    });
+  });
+
   group('painel de filtros recolhido', () {
     testWidgets('começa fechado, dando a tela para a lista de jogos',
         (tester) async {
@@ -459,8 +519,16 @@ void main() {
       expect(find.text('Wingspan'), findsOneWidget);
       expect(find.text('Gloomhaven'), findsNothing);
 
-      // O X do chip desfaz o filtro sem precisar reabrir o painel.
-      await tester.tap(find.byIcon(Icons.close).last);
+      // O X do chip desfaz o filtro sem precisar reabrir o painel. O alvo é o
+      // X **dentro do chip**: a tela tem outros ícones iguais, e mirar pelo
+      // último da árvore faz o teste passar a testar outra coisa quando a
+      // tela ganha um botão.
+      await tester.tap(
+        find.descendant(
+          of: find.widgetWithText(InputChip, '5 jogadores'),
+          matching: find.byIcon(Icons.close),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Gloomhaven'), findsOneWidget);

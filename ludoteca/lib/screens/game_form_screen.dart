@@ -22,10 +22,17 @@ class GameFormScreen extends StatefulWidget {
     this.fromBgg,
     this.existing,
     this.ownershipInicial,
+    this.anunciarSalvo = true,
   });
 
   /// Tipo já escolhido por quem abriu a tela.
   final Ownership? ownershipInicial;
+
+  /// Falso quando salvar o jogo é meio de caminho — registrar a partida que
+  /// você acabou de jogar, apontar o jogo que entrou numa troca. Nesses casos
+  /// o aviso de "entrou na coleção" fala do passo errado: quem chamou avisa do
+  /// que de fato aconteceu quando o fluxo termina.
+  final bool anunciarSalvo;
 
   final CatalogGameDetails? fromBgg;
   final Game? existing;
@@ -632,6 +639,8 @@ class _GameFormScreenState extends State<GameFormScreen> {
         );
         return;
       }
+      if (!widget.anunciarSalvo) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(switch ((editando: _editando, tipo: _ownership)) {

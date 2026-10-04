@@ -477,6 +477,134 @@ void main() {
     });
   });
 
+  group('migração v8 → v9 (troca de N por M)', () {
+    /// Monta um banco na v8: o schema que está hoje no celular de quem usa o
+    /// app, com uma troca gravada do jeito antigo (um `traded_for_id` só).
+    Future<void> criaV8ComTroca() async {
+      await _criaBancoV2(caminho);
+
+      final db = await databaseFactory.openDatabase(
+        caminho,
+        options: OpenDatabaseOptions(version: 2),
+      );
+      await db.execute(
+        'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)',
+      );
+      await db.execute('ALTER TABLE games ADD COLUMN link_kind TEXT');
+      await db.execute('ALTER TABLE plays ADD COLUMN item_game_id INTEGER');
+      await db.execute('ALTER TABLE games ADD COLUMN ownership TEXT');
+      await db.execute('ALTER TABLE games ADD COLUMN target_price REAL');
+      await db.execute('ALTER TABLE games ADD COLUMN last_price REAL');
+      await db.execute('ALTER TABLE games ADD COLUMN last_price_at TEXT');
+      await db.execute('ALTER TABLE games ADD COLUMN disposal_kind TEXT');
+      await db.execute('ALTER TABLE games ADD COLUMN traded_for_id INTEGER');
+      await db.setVersion(8);
+
+      // Scythe (400) saiu numa troca; Dune, que valia 100, ficou com os 500 —
+      // é assim que a versão antiga somava.
+      await db.insert('games', {
+        'name': 'Scythe',
+        'price': 400.0,
+        'sleeve_cost': 0.0,
+        'accessory_cost': 0.0,
+        'manual_play_count': 0,
+        'is_expansion': 0,
+        'sold': 1,
+        'sold_date': '2025-09-10',
+        'disposal_kind': 'trocado',
+        'traded_for_id': 2,
+        'created_at': '2024-01-15',
+      });
+      await db.insert('games', {
+        'name': 'Dune Imperium',
+        'price': 500.0,
+        'sleeve_cost': 0.0,
+        'accessory_cost': 0.0,
+        'manual_play_count': 0,
+        'is_expansion': 0,
+        'sold': 0,
+        'created_at': '2025-09-10',
+      });
+      await db.close();
+    }
+
+    test('a troca antiga vira uma troca de verdade, sem mexer no dinheiro',
+        () async {
+      await criaV8ComTroca();
+
+      final app = AppDatabase.paraArquivo(caminho);
+      final repo = GameRepository(database: app);
+      final db = await app.db;
+
+      expect(await db.getVersion(), AppDatabase.versaoAtual);
+      expect(await _tabelaExiste(db, 'trades'), isTrue);
+      expect(await _tabelaExiste(db, 'suggestions'), isTrue);
+
+      // O preço fica como estava: o dinheiro já foi transferido pela versão
+      // antiga, e mexer nele na migração mudaria o total da coleção sozinho.
+      final dune = await repo.gameById(2);
+      expect(dune!.price, 500.0);
+
+      final troca = await repo.tradeDeJogo(1);
+      expect(troca!.saiu.single.nome, 'Scythe');
+      expect(troca.entrou.single.nome, 'Dune Imperium');
+
+      await app.close();
+    });
+
+    test('desfazer uma troca migrada devolve o preço que o jogo tinha',
+        () async {
+      // Este é o motivo de a migração existir em vez de deixar as trocas
+      // antigas de fora: sem o preço anterior gravado, desfazer teria de
+      // adivinhar.
+      await criaV8ComTroca();
+
+      final app = AppDatabase.paraArquivo(caminho);
+      final repo = GameRepository(database: app);
+
+      await repo.desfazerSaida((await repo.gameById(1))!);
+
+      expect((await repo.gameById(2))!.price, 100.0);
+      expect((await repo.gameById(1))!.isGone, isFalse);
+
+      await app.close();
+    });
+  });
+
+  group('sugestões', () {
+    test('anota, marca como feita e apaga', () async {
+      final app = AppDatabase.paraArquivo(caminho);
+      final repo = GameRepository(database: app);
+
+      final id = await repo.addSuggestion('  deixar editar a troca depois  ');
+      var lista = await repo.suggestions();
+      expect(lista.single.text, 'deixar editar a troca depois');
+      expect(lista.single.done, isFalse);
+
+      await repo.setSuggestionDone(id, true);
+      expect((await repo.suggestions()).single.done, isTrue);
+
+      await repo.deleteSuggestion(id);
+      expect(await repo.suggestions(), isEmpty);
+
+      await app.close();
+    });
+
+    test('o que ainda não foi feito aparece primeiro', () async {
+      final app = AppDatabase.paraArquivo(caminho);
+      final repo = GameRepository(database: app);
+
+      final feita = await repo.addSuggestion('já feita');
+      await repo.addSuggestion('ainda falta');
+      await repo.setSuggestionDone(feita, true);
+
+      final lista = await repo.suggestions();
+      expect(lista.first.text, 'ainda falta');
+
+      await app.close();
+    });
+  });
+
   group('settings', () {
     test('gravar a mesma chave duas vezes substitui, não duplica', () async {
       final app = AppDatabase.paraArquivo(caminho);

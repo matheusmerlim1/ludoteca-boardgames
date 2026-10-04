@@ -14,6 +14,11 @@ import 'game_cover.dart';
 /// Ordena por **jogado recentemente**, não por nome: quem acabou de jogar
 /// alguma coisa provavelmente vai jogar de novo, e o alfabeto não ajuda em
 /// nada nesse momento.
+///
+/// A mesma folha serve à troca ("qual jogo entrou?"), com outro título e outra
+/// saída de escape — as duas telas fazem a mesma pergunta com palavras
+/// diferentes, e duplicar a busca com capa e ordenação daria duas listas para
+/// manter.
 /// O que saiu da escolha: um jogo da coleção, ou o pedido de buscar fora.
 class PickGameResult {
   const PickGameResult.jogo(this.entry) : buscarNoCatalogo = false;
@@ -26,21 +31,57 @@ class PickGameResult {
 }
 
 class PickGameSheet extends StatefulWidget {
-  const PickGameSheet({super.key, required this.entries});
+  const PickGameSheet({
+    super.key,
+    required this.entries,
+    this.titulo = 'Qual jogo você jogou?',
+    this.escapeTitulo = 'Joguei um jogo que não é meu',
+    this.escapeSubtitulo = 'Busca no catálogo e já registra a partida',
+    this.escapeIcone = Icons.travel_explore,
+    this.mostrarEscape = true,
+    this.porNome = false,
+  });
 
   final List<GameEntry> entries;
 
+  /// O que a folha pergunta. Muda com o caminho que abriu a folha.
+  final String titulo;
+
+  /// A saída para quando o jogo não está na lista: cadastrar um novo.
+  final String escapeTitulo;
+  final String escapeSubtitulo;
+  final IconData escapeIcone;
+  final bool mostrarEscape;
+
+  /// Ordena por nome em vez de "jogado por último". Numa troca, a última vez
+  /// que o jogo foi à mesa não diz nada sobre ele estar na negociação.
+  final bool porNome;
+
   /// Devolve o jogo escolhido, ou [PickGameResult.buscar] quando o jogo não
-  /// está cadastrado e você quer procurá-lo no catálogo.
+  /// está cadastrado e você quer cadastrá-lo agora.
   static Future<PickGameResult?> show(
     BuildContext context, {
     required List<GameEntry> entries,
+    String titulo = 'Qual jogo você jogou?',
+    String escapeTitulo = 'Joguei um jogo que não é meu',
+    String escapeSubtitulo = 'Busca no catálogo e já registra a partida',
+    IconData escapeIcone = Icons.travel_explore,
+    bool mostrarEscape = true,
+    bool porNome = false,
   }) {
     return showModalBottomSheet<PickGameResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => PickGameSheet(entries: entries),
+      builder: (_) => PickGameSheet(
+        entries: entries,
+        titulo: titulo,
+        escapeTitulo: escapeTitulo,
+        escapeSubtitulo: escapeSubtitulo,
+        escapeIcone: escapeIcone,
+        mostrarEscape: mostrarEscape,
+        porNome: porNome,
+      ),
     );
   }
 
@@ -66,6 +107,12 @@ class _PickGameSheetState extends State<PickGameSheet> {
       final alvo = normalizaNome('${e.game.displayName} ${e.game.name}');
       return palavras.every(alvo.contains);
     }).toList();
+
+    if (widget.porNome) {
+      lista.sort((a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      return lista;
+    }
 
     lista.sort((a, b) {
       final da = a.lastPlayed;
@@ -112,7 +159,7 @@ class _PickGameSheetState extends State<PickGameSheet> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  Text('Qual jogo você jogou?', style: text.titleMedium),
+                  Text(widget.titulo, style: text.titleMedium),
                   const SizedBox(height: 10),
                   TextField(
                     controller: _busca,
@@ -139,20 +186,24 @@ class _PickGameSheetState extends State<PickGameSheet> {
             const SizedBox(height: 10),
             Divider(height: 1, color: viz.gridline),
 
-            // Jogo de outra pessoa quase nunca está cadastrado. Sem esta saída,
-            // registrar a partida exigiria sair daqui, cadastrar o jogo, achar
-            // de novo e só então lançar.
-            ListTile(
-              leading: CircleAvatar(
-                backgroundColor: viz.serie(0).withValues(alpha: 0.14),
-                child: Icon(Icons.travel_explore, color: viz.serie(0), size: 20),
+            // O jogo que você procura quase nunca está cadastrado nos dois
+            // casos que abrem esta folha: o jogo de outra pessoa que você
+            // acabou de jogar, e o jogo que chegou numa troca. Sem esta saída,
+            // seria preciso fechar, cadastrar, e achar tudo de novo.
+            if (widget.mostrarEscape) ...[
+              ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: viz.serie(0).withValues(alpha: 0.14),
+                  child:
+                      Icon(widget.escapeIcone, color: viz.serie(0), size: 20),
+                ),
+                title: Text(widget.escapeTitulo),
+                subtitle: Text(widget.escapeSubtitulo),
+                onTap: () =>
+                    Navigator.of(context).pop(const PickGameResult.buscar()),
               ),
-              title: const Text('Joguei um jogo que não é meu'),
-              subtitle: const Text('Busca no catálogo e já registra a partida'),
-              onTap: () =>
-                  Navigator.of(context).pop(const PickGameResult.buscar()),
-            ),
-            Divider(height: 1, color: viz.gridline),
+              Divider(height: 1, color: viz.gridline),
+            ],
 
             Expanded(
               child: visiveis.isEmpty

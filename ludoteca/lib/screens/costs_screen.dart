@@ -2,12 +2,15 @@
 import 'package:provider/provider.dart';
 
 import '../data/game_repository.dart';
+import '../models/extra.dart';
 import '../stats/cost_stats.dart';
 import '../state/collection_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
+import '../widgets/chart_card.dart';
 import '../widgets/donut_chart.dart';
 import '../widgets/meta_sheet.dart';
+import '../widgets/extra_sheet.dart';
 import '../widgets/month_bar_chart.dart';
 import '../widgets/month_spend_sheet.dart';
 import '../widgets/play_bubbles.dart';
@@ -64,7 +67,10 @@ class _CostsScreenState extends State<CostsScreen> {
       );
     }
 
-    final stats = CostStats.compute(entries: store.allEntries);
+    final stats = CostStats.compute(
+      entries: store.allEntries,
+      extras: store.extras,
+    );
 
     if (stats.isEmpty) {
       return Scaffold(
@@ -99,6 +105,13 @@ class _CostsScreenState extends State<CostsScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Custos e partidas'),
+          actions: [
+            IconButton(
+              onPressed: () => _editarExtra(null),
+              icon: const Icon(Icons.add_shopping_cart),
+              tooltip: 'Adicionar kit ou extra',
+            ),
+          ],
           bottom: TabBar(
             isScrollable: true,
             tabAlignment: TabAlignment.start,
@@ -199,7 +212,15 @@ class _CostsScreenState extends State<CostsScreen> {
                 entries: store.allEntries,
                 mesInicial: mes,
                 onAbrirJogo: _abrir,
+                extras: store.extras,
+                onAbrirExtra: _editarExtra,
               ),
+            ),
+            const SizedBox(height: 16),
+            _ExtrasCard(
+              extras: store.extras,
+              onAdicionar: () => _editarExtra(null),
+              onEditar: _editarExtra,
             ),
     ];
   }
@@ -392,7 +413,25 @@ class _CostsScreenState extends State<CostsScreen> {
       entries: store.allEntries,
       mesInicial: DateTime.now(),
       onAbrirJogo: _abrir,
+      extras: store.extras,
+      onAbrirExtra: _editarExtra,
     );
+  }
+
+  /// Cadastra (nulo) ou edita um kit/extra avulso.
+  Future<void> _editarExtra(Extra? extra) async {
+    final store = context.read<CollectionStore>();
+    final r = await ExtraSheet.show(context, inicial: extra);
+    if (r == null) return;
+    if (r.apagar && extra?.id != null) {
+      await store.deleteExtra(extra!.id!);
+    } else if (r.salvo != null) {
+      if (r.salvo!.id == null) {
+        await store.addExtra(r.salvo!);
+      } else {
+        await store.updateExtra(r.salvo!);
+      }
+    }
   }
 
   void _abrir(int gameId) {
@@ -423,10 +462,12 @@ class _Numeros extends StatelessWidget {
       tiles: [
         StatTile(
           label: 'TOTAL INVESTIDO',
-          value: dinheiro(stats.totalInvested, casas: 0),
+          // Com extras, o total é o do hobby: jogos mais kits e playmats.
+          value: dinheiro(stats.totalSpent, casas: 0),
           hint: '${stats.baseGameCount} '
               '${stats.baseGameCount == 1 ? 'jogo' : 'jogos'}'
-              '${stats.expansionCount > 0 ? ' + ${stats.expansionCount} exp.' : ''}',
+              '${stats.expansionCount > 0 ? ' + ${stats.expansionCount} exp.' : ''}'
+              '${stats.extrasCount > 0 ? ' + ${stats.extrasCount} ${stats.extrasCount == 1 ? 'extra' : 'extras'}' : ''}',
         ),
         StatTile(
           label: 'CUSTO POR MÊS',
@@ -443,6 +484,20 @@ class _Numeros extends StatelessWidget {
               'de ${stats.datedGameCount} jogos; '
                   '${stats.undatedGameCount} sem data · toque para ver o mês',
             _ => 'custo de posse · toque para ver o que comprou no mês',
+          },
+          onTap: onVerGastoDoMes,
+        ),
+        // O que saiu do bolso neste mês. Fica ao lado do custo por mês (de
+        // posse) porque são perguntas diferentes: "quanto a coleção me custa
+        // por mês" e "quanto eu gastei este mês".
+        StatTile(
+          label: 'CUSTO NO MÊS',
+          value: dinheiro(stats.currentMonthSpend.total, casas: 0),
+          hint: switch (stats.currentMonthSpend.itemCount) {
+            0 => 'nada comprado em ${mesAnoLongo(stats.currentMonthSpend.month)}'
+                ' · toque para ver os meses',
+            final n => '$n ${n == 1 ? 'item' : 'itens'} em '
+                '${mesAnoLongo(stats.currentMonthSpend.month)} · toque para ver',
           },
           onTap: onVerGastoDoMes,
         ),
@@ -502,6 +557,95 @@ class _Numeros extends StatelessWidget {
             hint: 'jogos que saíram da coleção',
           ),
       ],
+    );
+  }
+}
+
+/// Kits e extras avulsos: o que não é de um jogo só.
+class _ExtrasCard extends StatelessWidget {
+  const _ExtrasCard({
+    required this.extras,
+    required this.onAdicionar,
+    required this.onEditar,
+  });
+
+  final List<Extra> extras;
+  final VoidCallback onAdicionar;
+  final void Function(Extra) onEditar;
+
+  @override
+  Widget build(BuildContext context) {
+    final viz = context.viz;
+    final text = Theme.of(context).textTheme;
+    final total = extras.fold<double>(0, (s, x) => s + x.price);
+
+    return ChartCard(
+      title: 'Kits e extras',
+      subtitle: extras.isEmpty
+          ? 'Sleeves, playmat, organizador que não são de um jogo só. '
+              'Entram no custo do mês da compra.'
+          : '${extras.length} ${extras.length == 1 ? 'item' : 'itens'} · '
+              '${dinheiro(total)}. Entram no custo do mês da compra.',
+      trailing: IconButton(
+        onPressed: onAdicionar,
+        icon: const Icon(Icons.add),
+        tooltip: 'Adicionar kit ou extra',
+        visualDensity: VisualDensity.compact,
+      ),
+      child: extras.isEmpty
+          ? Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onAdicionar,
+                icon: const Icon(Icons.add_shopping_cart),
+                label: const Text('Adicionar o primeiro'),
+              ),
+            )
+          : Column(
+              children: [
+                for (final x in extras)
+                  InkWell(
+                    onTap: () => onEditar(x),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        children: [
+                          Icon(x.kind.icon, size: 20, color: viz.inkMuted),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  x.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: text.bodyMedium
+                                      ?.copyWith(color: viz.inkPrimary),
+                                ),
+                                Text(
+                                  '${x.kind.label.toLowerCase()} · '
+                                  '${x.purchaseDate == null ? 'sem data' : data(x.purchaseDate!)}',
+                                  style: text.labelSmall
+                                      ?.copyWith(color: viz.inkMuted),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            dinheiro(x.price),
+                            style: text.bodyMedium?.copyWith(
+                              color: viz.inkPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 }

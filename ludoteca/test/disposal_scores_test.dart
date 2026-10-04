@@ -6,6 +6,7 @@ import 'package:ludoteca/data/game_repository.dart';
 import 'package:ludoteca/models/game.dart';
 import 'package:ludoteca/models/play.dart';
 import 'package:ludoteca/models/play_score.dart';
+import 'package:ludoteca/models/trade.dart';
 import 'package:ludoteca/stats/cost_stats.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -112,6 +113,143 @@ void main() {
       expect(velho.soldPrice, isNull);
     });
 
+    test('o preço do que entrou é substituído, não somado', () async {
+      // O preço cadastrado no jogo que chega é **valor de mercado**: serve para
+      // dizer quanto ele vale numa negociação, não para dizer que você o pagou.
+      // Quem pagou a conta foi o jogo que saiu. Somar os dois faria a coleção
+      // inteira ganhar 100 reais de investimento que ninguém gastou.
+      final saiu = await repo.insertGame(const Game(name: 'Scythe', price: 400));
+      final entrou = await repo.insertGame(
+        const Game(name: 'Dune Imperium', price: 100),
+      );
+
+      await repo.registrarSaida(
+        jogo: await recarrega(saiu),
+        tipo: Disposal.trocado,
+        trocadoPorId: entrou,
+      );
+
+      expect((await recarrega(entrou)).price, 400);
+    });
+
+    test('um jogo por dois divide o valor na proporção de cada um', () async {
+      // O caso que o app promete: 500 trocados por um de 300 e um de 100 —
+      // 75% para o primeiro, 25% para o segundo.
+      final saiu = await repo.insertGame(const Game(name: 'Gloomhaven', price: 500));
+      final grande = await repo.insertGame(const Game(name: 'Ark Nova', price: 300));
+      final pequeno = await repo.insertGame(const Game(name: 'Azul', price: 100));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [
+          TrocaEntrada(gameId: grande),
+          TrocaEntrada(gameId: pequeno),
+        ],
+      );
+
+      expect((await recarrega(grande)).price, 375);
+      expect((await recarrega(pequeno)).price, 125);
+      // Nada apareceu nem sumiu: o dinheiro só mudou de caixa.
+      expect((await contas()).totalInvested, 500);
+    });
+
+    test('dois jogos por um juntam o valor no que entrou', () async {
+      final a = await repo.insertGame(const Game(name: 'Scythe', price: 300));
+      final b = await repo.insertGame(
+        const Game(name: 'Everdell', price: 200, sleeveCost: 40),
+      );
+      final entrou = await repo.insertGame(const Game(name: 'Dune', price: 900));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(a), await recarrega(b)],
+        entrando: [TrocaEntrada(gameId: entrou)],
+      );
+
+      expect((await recarrega(entrou)).price, 540);
+      expect((await recarrega(a)).disposal, Disposal.trocado);
+      expect((await recarrega(b)).disposal, Disposal.trocado);
+      expect((await contas()).totalInvested, 540);
+    });
+
+    test('o valor digitado na folha manda no rateio, não o preço salvo',
+        () async {
+      // Na folha dá para dizer quanto cada jogo que entrou vale, sem ter de
+      // editar o cadastro dele antes.
+      final saiu = await repo.insertGame(const Game(name: 'Gloomhaven', price: 800));
+      final x = await repo.insertGame(const Game(name: 'Ark Nova', price: 10));
+      final y = await repo.insertGame(const Game(name: 'Azul', price: 10));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [
+          TrocaEntrada(gameId: x, valorReferencia: 300),
+          TrocaEntrada(gameId: y, valorReferencia: 100),
+        ],
+      );
+
+      expect((await recarrega(x)).price, 600);
+      expect((await recarrega(y)).price, 200);
+    });
+
+    test('sem valor nenhum, divide em partes iguais', () async {
+      // Jogo cadastrado sem preço é comum. Deixar tudo no primeiro da lista
+      // seria pior que dividir igual, e travar o registro seria pior ainda.
+      final saiu = await repo.insertGame(const Game(name: 'Scythe', price: 300));
+      final x = await repo.insertGame(const Game(name: 'A'));
+      final y = await repo.insertGame(const Game(name: 'B'));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [TrocaEntrada(gameId: x), TrocaEntrada(gameId: y)],
+      );
+
+      expect((await recarrega(x)).price, 150);
+      expect((await recarrega(y)).price, 150);
+    });
+
+    test('a sobra de centavos não some do total', () async {
+      // 100 dividido por três dá 33,33 três vezes = 99,99. O centavo que falta
+      // vai para uma das partes, senão a coleção perde dinheiro a cada troca.
+      final saiu = await repo.insertGame(const Game(name: 'Scythe', price: 100));
+      final ids = [
+        for (var i = 0; i < 3; i++)
+          await repo.insertGame(Game(name: 'Jogo $i', price: 10)),
+      ];
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [for (final id in ids) TrocaEntrada(gameId: id)],
+      );
+
+      var soma = 0.0;
+      for (final id in ids) {
+        soma += (await recarrega(id)).price;
+      }
+      expect(soma, 100);
+      expect((await contas()).totalInvested, 100);
+    });
+
+    test('quem entra deixa de ser desejado e ganha data de compra', () async {
+      // Receber numa troca é exatamente como um jogo da lista de desejos vira
+      // seu. Sem isso ele continuaria fora dos custos, com o valor da troca
+      // dentro dele — dinheiro invisível.
+      final saiu = await repo.insertGame(const Game(name: 'Scythe', price: 400));
+      final entrou = await repo.insertGame(
+        const Game(name: 'Dune', price: 400, ownership: Ownership.desejada),
+      );
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [TrocaEntrada(gameId: entrou)],
+        quando: DateTime(2026, 5, 20),
+      );
+
+      final novo = await recarrega(entrou);
+      expect(novo.ownership, Ownership.propria);
+      expect(novo.purchaseDate, DateTime(2026, 5, 20));
+      expect(novo.countsAsInvestment, isTrue);
+    });
+
     test('o total investido na coleção não muda com a troca', () async {
       final saiu = await repo.insertGame(const Game(name: 'Scythe', price: 400));
       final entrou = await repo.insertGame(const Game(name: 'Dune Imperium'));
@@ -141,14 +279,90 @@ void main() {
         tipo: Disposal.trocado,
         trocadoPorId: entrou,
       );
-      expect((await recarrega(entrou)).price, 500);
+      expect((await recarrega(entrou)).price, 400);
 
       await repo.desfazerSaida(await recarrega(saiu));
 
+      // O preço volta ao que era antes da troca — o valor de mercado que você
+      // tinha cadastrado, não uma subtração aproximada.
       expect((await recarrega(entrou)).price, 100);
       final velho = await recarrega(saiu);
       expect(velho.disposal, isNull);
       expect(velho.isGone, isFalse);
+    });
+
+    test('desfazer devolve as duas pontas de uma troca de vários', () async {
+      final a = await repo.insertGame(const Game(name: 'Scythe', price: 300));
+      final b = await repo.insertGame(const Game(name: 'Everdell', price: 200));
+      final x = await repo.insertGame(const Game(name: 'Ark Nova', price: 300));
+      final y = await repo.insertGame(const Game(name: 'Azul', price: 100));
+
+      final antes = (await contas()).totalInvested;
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(a), await recarrega(b)],
+        entrando: [TrocaEntrada(gameId: x), TrocaEntrada(gameId: y)],
+      );
+      expect((await recarrega(x)).price, 375);
+
+      await repo.desfazerSaida(await recarrega(a));
+
+      // Desfazer por **uma** das pontas desmancha a troca inteira: devolver só
+      // um lado deixaria o valor contado duas vezes.
+      expect((await recarrega(a)).isGone, isFalse);
+      expect((await recarrega(b)).isGone, isFalse);
+      expect((await recarrega(x)).price, 300);
+      expect((await recarrega(y)).price, 100);
+      expect((await contas()).totalInvested, antes);
+    });
+
+    test('desfazer uma venda não desmancha a troca em que o jogo chegou',
+        () async {
+      // O jogo entrou numa troca em janeiro e foi vendido em março. Desfazer a
+      // venda tem de mexer só na venda.
+      final velho = await repo.insertGame(const Game(name: 'Scythe', price: 400));
+      final novo = await repo.insertGame(const Game(name: 'Dune', price: 400));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(velho)],
+        entrando: [TrocaEntrada(gameId: novo)],
+      );
+      await repo.registrarSaida(
+        jogo: await recarrega(novo),
+        tipo: Disposal.vendido,
+        valorRecebido: 350,
+      );
+
+      await repo.desfazerSaida(await recarrega(novo));
+
+      expect((await recarrega(novo)).isGone, isFalse);
+      expect((await recarrega(novo)).price, 400);
+      // A troca continua de pé: o jogo que saiu nela não voltou para a estante.
+      expect((await recarrega(velho)).disposal, Disposal.trocado);
+    });
+
+    test('a ficha sabe contar a troca dos dois lados', () async {
+      final saiu = await repo.insertGame(const Game(name: 'Gloomhaven', price: 500));
+      final x = await repo.insertGame(const Game(name: 'Ark Nova', price: 300));
+      final y = await repo.insertGame(const Game(name: 'Azul', price: 100));
+
+      await repo.registrarTroca(
+        saindo: [await recarrega(saiu)],
+        entrando: [TrocaEntrada(gameId: x), TrocaEntrada(gameId: y)],
+      );
+
+      final doQueSaiu = await repo.tradeDeJogo(saiu);
+      expect(doQueSaiu!.saiu.single.nome, 'Gloomhaven');
+      expect(doQueSaiu.entrou.map((p) => p.nome), containsAll(['Ark Nova', 'Azul']));
+
+      // Do outro lado é a mesma troca: é ela que explica um preço que o
+      // usuário nunca digitou.
+      final doQueEntrou = await repo.tradeDeJogo(x);
+      expect(doQueEntrou!.id, doQueSaiu.id);
+      expect(
+        doQueEntrou.entrou.firstWhere((p) => p.gameId == x).parte,
+        375,
+      );
     });
 
     test('troca sem apontar o jogo novo não transfere nada', () async {

@@ -7,7 +7,14 @@ import '../theme.dart';
 ///
 /// Depois de baixada uma vez a imagem fica no celular, então a coleção abre
 /// normalmente sem internet — só o cadastro de jogo novo precisa de rede.
-class GameCover extends StatelessWidget {
+///
+/// **Reinstalar o app apaga esse cache.** Todas as capas precisam ser baixadas
+/// de novo na primeira abertura, e se a rede falhar nesse momento a coleção
+/// inteira aparece sem capa. Por isso a falha de download não é desenhada igual
+/// à ausência de capa: uma é "este jogo não tem imagem cadastrada", a outra é
+/// "não consegui baixar agora", e tratar as duas como a mesma tela de iniciais
+/// esconde justamente a que tem conserto.
+class GameCover extends StatefulWidget {
   const GameCover({
     super.key,
     required this.url,
@@ -22,24 +29,40 @@ class GameCover extends StatelessWidget {
   final BoxFit fit;
 
   @override
-  Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(borderRadius);
+  State<GameCover> createState() => _GameCoverState();
+}
 
-    if (url == null || url!.isEmpty) {
+class _GameCoverState extends State<GameCover> {
+  /// Muda para forçar o `CachedNetworkImage` a tentar o download de novo — a
+  /// chave nova descarta o estado de erro do widget anterior.
+  int _tentativa = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(widget.borderRadius);
+    final url = widget.url;
+
+    if (url == null || url.isEmpty) {
       return ClipRRect(
         borderRadius: radius,
-        child: _Placeholder(name: name),
+        child: _Placeholder(name: widget.name),
       );
     }
 
     return ClipRRect(
       borderRadius: radius,
       child: CachedNetworkImage(
-        imageUrl: url!,
-        fit: fit,
+        key: ValueKey('$url#$_tentativa'),
+        imageUrl: url,
+        fit: widget.fit,
         fadeInDuration: const Duration(milliseconds: 180),
         placeholder: (context, _) => _Skeleton(),
-        errorWidget: (context, _, __) => _Placeholder(name: name),
+        errorWidget: (context, _, __) => _Placeholder(
+          name: widget.name,
+          // Tocar tenta baixar de novo. Sem isso, uma queda de rede de dez
+          // segundos deixa a lista sem capa até você fechar e abrir o app.
+          onTentarDeNovo: () => setState(() => _tentativa++),
+        ),
       ),
     );
   }
@@ -54,28 +77,54 @@ class _Skeleton extends StatelessWidget {
 
 /// Sem capa: as iniciais do jogo sobre um fundo neutro. Nunca uma cor de
 /// série — isso é ausência de dado, não identidade de uma categoria.
+///
+/// Com [onTentarDeNovo], as iniciais ganham uma marca de "não baixou": o jogo
+/// **tem** capa cadastrada e o download é que falhou. É a diferença entre um
+/// dado que não existe e um que só não chegou.
 class _Placeholder extends StatelessWidget {
-  const _Placeholder({required this.name});
+  const _Placeholder({required this.name, this.onTentarDeNovo});
 
   final String name;
+  final VoidCallback? onTentarDeNovo;
 
   @override
   Widget build(BuildContext context) {
     final viz = context.viz;
-    return Container(
-      color: viz.gridline,
-      alignment: Alignment.center,
-      child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Text(
-          _iniciais(name),
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: viz.inkMuted,
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 1,
-          ),
+
+    return GestureDetector(
+      onTap: onTentarDeNovo,
+      child: Container(
+        color: viz.gridline,
+        alignment: Alignment.center,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Text(
+                  _iniciais(name),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: viz.inkMuted,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ),
+            if (onTentarDeNovo != null)
+              Positioned(
+                right: 2,
+                bottom: 2,
+                child: Icon(
+                  Icons.cloud_off,
+                  size: 12,
+                  color: viz.inkMuted,
+                ),
+              ),
+          ],
         ),
       ),
     );

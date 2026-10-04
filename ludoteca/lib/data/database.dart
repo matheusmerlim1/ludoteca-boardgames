@@ -81,6 +81,70 @@ class AppDatabase {
   static const _playersIndexDdl =
       'CREATE UNIQUE INDEX idx_players_name ON players(name COLLATE NOCASE)';
 
+  /// A troca em si, e as pontas dela.
+  ///
+  /// Tabela própria porque troca é N por M: um jogo grande vira dois menores,
+  /// ou três juntos viram um. O `games.traded_for_id` só apontava um jogo, o
+  /// que obrigava a escolher qual das pontas mentir.
+  ///
+  /// `price_before`, `ownership_before` e `purchase_before` guardam o estado de
+  /// cada jogo **antes** da troca. É o que o desfazer devolve: recalcular por
+  /// subtração já erra quando o mesmo jogo entra em duas trocas seguidas, e
+  /// erra em silêncio.
+  static const _tradesDdl = [
+    '''
+    CREATE TABLE trades (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      traded_at TEXT NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE trade_games (
+      trade_id        INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+      game_id         INTEGER NOT NULL REFERENCES games(id)  ON DELETE CASCADE,
+      -- 'saiu' | 'entrou'
+      side            TEXT    NOT NULL,
+      price_before    REAL    NOT NULL DEFAULT 0,
+      ownership_before TEXT,
+      purchase_before TEXT,
+      -- Só de quem entrou: o peso usado no rateio e a parte que coube a ele.
+      ref_value       REAL,
+      share           REAL,
+      PRIMARY KEY (trade_id, game_id)
+    )
+    ''',
+    'CREATE INDEX idx_trade_games_game ON trade_games(game_id)',
+  ];
+
+  /// Ideias de melhoria do próprio app, anotadas na hora em que incomodam.
+  ///
+  /// Fica no banco, e não num bloco de notas fora, porque a ideia aparece no
+  /// meio do uso — e uma ideia que exige sair do app para ser anotada não é
+  /// anotada.
+  static const _suggestionsDdl = '''
+    CREATE TABLE suggestions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      text       TEXT    NOT NULL,
+      created_at TEXT    NOT NULL,
+      done       INTEGER NOT NULL DEFAULT 0
+    )
+  ''';
+
+  /// Compras avulsas do hobby que não pertencem a um jogo: kit de sleeves,
+  /// playmat, organizador. Tabela própria para não entrarem na estante, no
+  /// custo por partida nem no "nunca jogado" — só nos gastos.
+  static const _extrasDdl = '''
+    CREATE TABLE extras (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      name          TEXT    NOT NULL,
+      -- 'sleeves' | 'playmat' | 'organizador' | 'acessorio' | 'outro'
+      kind          TEXT    NOT NULL DEFAULT 'outro',
+      price         REAL    NOT NULL DEFAULT 0,
+      purchase_date TEXT,
+      notes         TEXT
+    )
+  ''';
+
   /// Temas e mecânicas, e o vínculo deles com os jogos.
   static const _tagsDdl = [
     '''
@@ -145,7 +209,18 @@ class AppDatabase {
   ///          A migração semeia a tabela com o que já existe — inclusive os
   ///          nomes digitados no campo antigo "quem ganhou", que nunca tinham
   ///          entrado na sugestão.
-  static const _version = 8;
+  /// v8 → v9: `trades` e `trade_games`, e `suggestions`.
+  ///
+  ///          Até aqui a troca era um jogo por **um** jogo, gravada num
+  ///          `traded_for_id` só. A troca real é N por M — um jogo grande vira
+  ///          dois menores, três juntos viram um — e o valor investido precisa
+  ///          se dividir entre os que entraram, na proporção do que cada um
+  ///          vale. As trocas antigas viram linhas nas tabelas novas, com o
+  ///          preço anterior reconstruído, para o desfazer continuar exato.
+  /// v9 → v10: tabela `extras`, para compras avulsas (kit de sleeves,
+  ///          playmat, organizador) que entram no custo do mês sem ser um
+  ///          jogo. Só cria a tabela: nada do que já existe muda.
+  static const _version = 10;
 
   Database? _db;
 
@@ -210,6 +285,16 @@ class AppDatabase {
           await db.execute(_playersDdl);
           await db.execute(_playersIndexDdl);
           await _semeiaJogadores(db);
+        }
+        if (from < 9) {
+          for (final ddl in _tradesDdl) {
+            await db.execute(ddl);
+          }
+          await db.execute(_suggestionsDdl);
+          await _semeiaTrocas(db);
+        }
+        if (from < 10) {
+          await db.execute(_extrasDdl);
         }
       },
     );
@@ -287,7 +372,9 @@ class AppDatabase {
     await db.execute(_scoresIndexDdl);
     await db.execute(_playersDdl);
     await db.execute(_playersIndexDdl);
-    for (final ddl in _tagsDdl) {
+    await db.execute(_suggestionsDdl);
+    await db.execute(_extrasDdl);
+    for (final ddl in [..._tagsDdl, ..._tradesDdl]) {
       await db.execute(ddl);
     }
 
@@ -326,6 +413,90 @@ class AppDatabase {
     ''', [agora]);
   }
 
+  /// Transforma as trocas antigas (um `traded_for_id` no jogo) em linhas das
+  /// tabelas novas.
+  ///
+  /// Não mexe em preço nenhum: o dinheiro já está onde a versão antiga o
+  /// colocou. O que a migração faz é **reconstruir o preço anterior** de quem
+  /// recebeu o valor, que é a única informação que faltava para desfazer a
+  /// troca sem inventar número.
+  ///
+  /// A reconstrução é de trás para frente porque duas trocas podem ter
+  /// desembocado no mesmo jogo: desfazer a última tem de devolver o estado
+  /// imediatamente anterior a ela, não o do começo de tudo.
+  static Future<void> _semeiaTrocas(Database db) async {
+    final trocas = await db.query(
+      'games',
+      columns: [
+        'id',
+        'traded_for_id',
+        'price',
+        'sleeve_cost',
+        'accessory_cost',
+        'sold_date',
+      ],
+      where: "disposal_kind = 'trocado' AND traded_for_id IS NOT NULL",
+      orderBy: 'sold_date DESC, id DESC',
+    );
+    if (trocas.isEmpty) return;
+
+    double num2(Object? v) => (v as num?)?.toDouble() ?? 0;
+
+    // Preço corrente de cada destino enquanto desfazemos mentalmente as
+    // trocas, uma a uma.
+    final correntes = <int, double>{};
+
+    for (final linha in trocas) {
+      final saiuId = linha['id'] as int;
+      final entrouId = linha['traded_for_id'] as int;
+
+      final destino = await db.query(
+        'games',
+        columns: ['price', 'ownership', 'purchase_date'],
+        where: 'id = ?',
+        whereArgs: [entrouId],
+        limit: 1,
+      );
+      // O jogo que entrou pode ter sido apagado desde então. A ponta que
+      // sobrou ainda vale: sem ela, desfazer a saída não devolveria o jogo.
+      final existe = destino.isNotEmpty;
+
+      final transferido = num2(linha['price']) +
+          num2(linha['sleeve_cost']) +
+          num2(linha['accessory_cost']);
+
+      final atual = correntes[entrouId] ??
+          (existe ? num2(destino.first['price']) : 0);
+      final antes = atual - transferido;
+      correntes[entrouId] = antes < 0 ? 0 : antes;
+
+      final tradeId = await db.insert('trades', {
+        'traded_at': (linha['sold_date'] as String?) ??
+            DateTime.now().toIso8601String().substring(0, 10),
+      });
+
+      await db.insert('trade_games', {
+        'trade_id': tradeId,
+        'game_id': saiuId,
+        'side': 'saiu',
+        'price_before': num2(linha['price']),
+      });
+
+      if (!existe) continue;
+
+      await db.insert('trade_games', {
+        'trade_id': tradeId,
+        'game_id': entrouId,
+        'side': 'entrou',
+        'price_before': correntes[entrouId],
+        'ownership_before': destino.first['ownership'],
+        'purchase_before': destino.first['purchase_date'],
+        'ref_value': correntes[entrouId],
+        'share': transferido,
+      });
+    }
+  }
+
   Future<void> close() async {
     await _db?.close();
     _db = null;
@@ -336,5 +507,9 @@ class AppDatabase {
     final d = await db;
     await d.delete('plays');
     await d.delete('games');
+    // As pontas somem por cascata junto com os jogos; a troca em si ficaria
+    // como linha órfã, e o desfazer de uma troca sem pontas não faz nada.
+    await d.delete('trades');
+    await d.delete('extras');
   }
 }

@@ -1,13 +1,16 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/suggestion.dart';
 import '../services/backup_service.dart';
 import '../services/bgg_service.dart';
 import '../services/comparajogos_service.dart';
+import '../services/share_service.dart';
 import '../services/tag_backfill_service.dart';
 import '../services/game_catalog.dart';
 import '../state/collection_store.dart';
 import '../theme.dart';
+import '../utils/format.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -38,6 +41,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
         children: [
+          _CartaoSugestoes(store: store),
+          const SizedBox(height: 16),
           _CartaoTemas(store: store),
           const SizedBox(height: 16),
           _CartaoToken(store: store),
@@ -218,6 +223,201 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+/// Ideias de melhoria do próprio app.
+///
+/// A ideia aparece no meio do uso — "isto aqui devia ser assim" acontece com o
+/// celular na mão, no minuto em que a coisa incomoda. Uma anotação que exige
+/// sair do app e abrir outro aplicativo simplesmente não é feita, e a ideia se
+/// perde.
+///
+/// O que já foi feito não some, desce: serve para não pedir duas vezes a mesma
+/// coisa e para lembrar o que já foi pedido. E "Compartilhar" existe porque a
+/// lista só vale quando chega em quem vai implementar.
+class _CartaoSugestoes extends StatefulWidget {
+  const _CartaoSugestoes({required this.store});
+
+  final CollectionStore store;
+
+  @override
+  State<_CartaoSugestoes> createState() => _CartaoSugestoesState();
+}
+
+class _CartaoSugestoesState extends State<_CartaoSugestoes> {
+  final _texto = TextEditingController();
+  bool _aberto = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // A lista vem do banco na carga do app; isto cobre quem chegou aqui com o
+    // app já aberto desde antes de a tabela existir.
+    widget.store.carregarSugestoes();
+  }
+
+  @override
+  void dispose() {
+    _texto.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final viz = context.viz;
+
+    final lista = widget.store.suggestions;
+    final abertas = widget.store.suggestionsAbertas;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Sugestões de melhoria', style: text.titleMedium),
+                ),
+                if (lista.isNotEmpty)
+                  Text(
+                    abertas == 0
+                        ? 'todas feitas'
+                        : '$abertas ${abertas == 1 ? 'aberta' : 'abertas'}',
+                    style: text.labelSmall?.copyWith(
+                      color: abertas == 0 ? viz.good : viz.inkSecondary,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Anote aqui o que você quer que o app faça diferente, na hora em '
+              'que percebe. A lista fica guardada no aparelho e serve de pauta '
+              'para a próxima versão.',
+              style: text.bodySmall,
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _texto,
+              minLines: 1,
+              maxLines: 4,
+              textCapitalization: TextCapitalization.sentences,
+              onSubmitted: (_) => _adicionar(),
+              decoration: const InputDecoration(
+                labelText: 'Nova sugestão',
+                hintText: 'ex.: deixar editar o valor da troca depois',
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: _adicionar,
+              icon: const Icon(Icons.add),
+              label: const Text('Adicionar sugestão'),
+            ),
+            if (lista.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              // Fechada por padrão: a lista cresce, e Ajustes não pode virar
+              // uma tela de rolagem infinita por causa dela.
+              TextButton.icon(
+                onPressed: () => setState(() => _aberto = !_aberto),
+                icon: Icon(
+                  _aberto ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                ),
+                label: Text(
+                  _aberto
+                      ? 'Esconder a lista'
+                      : 'Ver as ${lista.length} '
+                          '${lista.length == 1 ? 'sugestão' : 'sugestões'}',
+                ),
+              ),
+              if (_aberto) ...[
+                const SizedBox(height: 4),
+                for (final s in lista) _linha(s, text, viz),
+                const SizedBox(height: 6),
+                OutlinedButton.icon(
+                  onPressed: () => _compartilhar(lista),
+                  icon: const Icon(Icons.ios_share, size: 18),
+                  label: const Text('Compartilhar a lista'),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _linha(Suggestion s, TextTheme text, VizColors viz) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Checkbox(
+            value: s.done,
+            visualDensity: VisualDensity.compact,
+            onChanged: (v) => widget.store.marcarSugestao(s.id!, v ?? false),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.text,
+                  style: text.bodySmall?.copyWith(
+                    color: s.done ? viz.inkMuted : viz.inkPrimary,
+                    decoration: s.done ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+                Text(
+                  data(s.createdAt),
+                  style: text.labelSmall?.copyWith(color: viz.inkMuted),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: () => widget.store.removerSugestao(s.id!),
+            icon: const Icon(Icons.delete_outline, size: 18),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Apagar',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _adicionar() async {
+    final texto = _texto.text.trim();
+    if (texto.isEmpty) return;
+
+    await widget.store.addSugestao(texto);
+    _texto.clear();
+    if (!mounted) return;
+    setState(() => _aberto = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Sugestão anotada.')),
+    );
+  }
+
+  Future<void> _compartilhar(List<Suggestion> lista) async {
+    const servico = ShareService();
+    final linhas = <String>[
+      '💡 Ludoteca — sugestões de melhoria',
+      '',
+      for (final s in lista)
+        '${s.done ? '[x]' : '[ ]'} ${s.text}  (${data(s.createdAt)})',
+    ];
+    await servico.compartilhar(
+      linhas.join('\n'),
+      assunto: 'Sugestões para a Ludoteca',
+    );
+  }
+}
+
 /// Preenchimento de temas dos jogos já cadastrados.
 ///
 /// Sem isto o filtro por tema nasce inútil numa coleção existente: jogos
@@ -250,7 +450,19 @@ class _CartaoTemasState extends State<_CartaoTemas> {
         .where((e) => store.tagsOf(e.id).isNotEmpty)
         .length;
     final total = store.allEntries.length;
-    final faltando = total - comTema;
+    final semCapa = store.allEntries
+        .where((e) =>
+            (e.game.imageUrl?.isEmpty ?? true) &&
+            (e.game.thumbUrl?.isEmpty ?? true))
+        .length;
+    // Um jogo pode estar nas duas contas; o que interessa aqui é quantos a
+    // varredura vai visitar, não a soma dos dois buracos.
+    final faltando = store.allEntries
+        .where((e) =>
+            store.tagsOf(e.id).isEmpty ||
+            ((e.game.imageUrl?.isEmpty ?? true) &&
+                (e.game.thumbUrl?.isEmpty ?? true)))
+        .length;
 
     return Card(
       child: Padding(
@@ -258,14 +470,16 @@ class _CartaoTemasState extends State<_CartaoTemas> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Temas e mecânicas', style: text.titleMedium),
+            Text('Capas, temas e mecânicas', style: text.titleMedium),
             const SizedBox(height: 6),
             Text(
               faltando == 0 && total > 0
-                  ? 'Todos os $total jogos já têm tema.'
-                  : 'O filtro por tema na coleção usa estes dados. '
-                      '$comTema de $total ${total == 1 ? 'jogo tem' : 'jogos têm'} '
-                      'tema; os outros foram cadastrados à mão e vieram sem.',
+                  ? 'Todos os $total jogos já têm capa e tema.'
+                  : 'Jogo cadastrado à mão ou vindo da planilha entra sem '
+                      'imagem e sem tema — é por isso que a lista mostra as '
+                      'iniciais no lugar da miniatura. Hoje: '
+                      '$semCapa ${semCapa == 1 ? 'jogo sem capa' : 'jogos sem capa'}, '
+                      '${total - comTema} sem tema, de $total.',
               style: text.bodySmall,
             ),
             if (faltando > 0) ...[
@@ -293,9 +507,9 @@ class _CartaoTemasState extends State<_CartaoTemas> {
               if (faltando > 0)
                 FilledButton.icon(
                   onPressed: () => _buscar(todos: false),
-                  icon: const Icon(Icons.label_outline),
+                  icon: const Icon(Icons.image_outlined),
                   label: Text(
-                    'Buscar temas de $faltando '
+                    'Buscar capas e temas de $faltando '
                     '${faltando == 1 ? 'jogo' : 'jogos'}',
                   ),
                 ),
@@ -382,6 +596,7 @@ class _Resultado extends StatelessWidget {
               child: Text(
                 '${relatorio.preenchidos} '
                 '${relatorio.preenchidos == 1 ? 'jogo preenchido' : 'jogos preenchidos'}'
+                '${relatorio.capas > 0 ? ', ${relatorio.capas} com capa nova' : ''}'
                 '${relatorio.cancelado ? ' (interrompido)' : ''}.',
                 style: text.bodySmall?.copyWith(color: viz.inkPrimary),
               ),
@@ -431,8 +646,8 @@ class _Resultado extends StatelessWidget {
   }
 
   String _motivo(BackfillOutcome o) => switch (o) {
-        BackfillOutcome.naoEncontrado => 'não achei no catálogo',
-        BackfillOutcome.semTags => 'o catálogo não tem tema para ele',
+        BackfillOutcome.naoEncontrado => 'não achei no catálogo — sem capa e sem tema',
+        BackfillOutcome.semTags => 'o catálogo não tem tema nem capa para ele',
         BackfillOutcome.falhou => 'falhou na busca',
         BackfillOutcome.preenchido => '',
       };

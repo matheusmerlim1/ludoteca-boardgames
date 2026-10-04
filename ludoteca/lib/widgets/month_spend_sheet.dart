@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/extra.dart';
 import '../models/game.dart';
 import '../theme.dart';
 import '../utils/format.dart';
@@ -20,7 +21,14 @@ class MonthSpendSheet extends StatefulWidget {
     required this.entries,
     required this.mesInicial,
     this.onAbrirJogo,
+    this.extras = const [],
+    this.onAbrirExtra,
   });
+
+  /// Compras avulsas (kits, playmats): entram no mês da data de compra.
+  final List<Extra> extras;
+
+  final void Function(Extra extra)? onAbrirExtra;
 
   /// A coleção inteira. A folha filtra por mês de compra por conta própria.
   final List<GameEntry> entries;
@@ -34,6 +42,8 @@ class MonthSpendSheet extends StatefulWidget {
     required List<GameEntry> entries,
     required DateTime mesInicial,
     void Function(int gameId)? onAbrirJogo,
+    List<Extra> extras = const [],
+    void Function(Extra extra)? onAbrirExtra,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -43,6 +53,8 @@ class MonthSpendSheet extends StatefulWidget {
         entries: entries,
         mesInicial: mesInicial,
         onAbrirJogo: onAbrirJogo,
+        extras: extras,
+        onAbrirExtra: onAbrirExtra,
       ),
     );
   }
@@ -60,11 +72,24 @@ class _MonthSpendSheetState extends State<MonthSpendSheet> {
       .where((e) => e.game.isMine && e.game.purchaseDate != null)
       .toList();
 
+  late final List<Extra> _extrasComData =
+      widget.extras.where((x) => x.purchaseDate != null).toList();
+
+  List<Extra> get _extrasDoMes => _extrasComData.where((x) {
+        final d = x.purchaseDate!;
+        return d.year == _mes.year && d.month == _mes.month;
+      }).toList();
+
   /// Meses com compra, do mais antigo para o mais novo.
   late final List<DateTime> _meses = () {
     final chaves = <String, DateTime>{};
     for (final e in _compras) {
       final d = e.game.purchaseDate!;
+      final m = DateTime(d.year, d.month);
+      chaves[chaveMes(m)] = m;
+    }
+    for (final x in _extrasComData) {
+      final d = x.purchaseDate!;
       final m = DateTime(d.year, d.month);
       chaves[chaveMes(m)] = m;
     }
@@ -119,11 +144,53 @@ class _MonthSpendSheetState extends State<MonthSpendSheet> {
     final text = Theme.of(context).textTheme;
 
     final itens = _doMes;
-    final total = itens.fold<double>(0, (s, e) => s + e.game.totalInvested);
+    final extras = _extrasDoMes;
+    final extrasSleeves = extras
+        .where((x) => x.isSleeve)
+        .fold<double>(0, (s, x) => s + x.price);
+    final extrasOutros = extras
+        .where((x) => !x.isSleeve)
+        .fold<double>(0, (s, x) => s + x.price);
+    final total = itens.fold<double>(0, (s, e) => s + e.game.totalInvested) +
+        extrasSleeves +
+        extrasOutros;
     final caixas = itens.fold<double>(0, (s, e) => s + e.game.price);
-    final sleeves = itens.fold<double>(0, (s, e) => s + e.game.sleeveCost);
+    final sleeves =
+        itens.fold<double>(0, (s, e) => s + e.game.sleeveCost) + extrasSleeves;
     final acessorios =
-        itens.fold<double>(0, (s, e) => s + e.game.accessoryCost);
+        itens.fold<double>(0, (s, e) => s + e.game.accessoryCost) + extrasOutros;
+    final quantos = itens.length + extras.length;
+
+    // Jogos e extras numa lista só, do mais caro para o mais barato: é o que
+    // explica o tamanho da barra daquele mês, seja caixa ou playmat.
+    final linhas = <({double valor, Widget linha})>[
+      for (final e in itens)
+        (
+          valor: e.game.totalInvested,
+          linha: _LinhaDeCompra(
+            entry: e,
+            onTap: widget.onAbrirJogo == null
+                ? null
+                : () {
+                    Navigator.of(context).pop();
+                    widget.onAbrirJogo!(e.id);
+                  },
+          ),
+        ),
+      for (final x in extras)
+        (
+          valor: x.price,
+          linha: _LinhaDeExtra(
+            extra: x,
+            onTap: widget.onAbrirExtra == null
+                ? null
+                : () {
+                    Navigator.of(context).pop();
+                    widget.onAbrirExtra!(x);
+                  },
+          ),
+        ),
+    ]..sort((a, b) => b.valor.compareTo(a.valor));
 
     final i = _meses.indexWhere((m) => chaveMes(m) == chaveMes(_mes));
     final temAnterior = i > 0;
@@ -166,10 +233,10 @@ class _MonthSpendSheetState extends State<MonthSpendSheet> {
                       style: text.titleMedium?.copyWith(fontSize: 16),
                     ),
                     Text(
-                      itens.isEmpty
+                      quantos == 0
                           ? 'nenhuma compra'
-                          : '${itens.length} '
-                              '${itens.length == 1 ? 'item' : 'itens'} · '
+                          : '$quantos '
+                              '${quantos == 1 ? 'item' : 'itens'} · '
                               '${dinheiro(total)}',
                       style: text.labelSmall?.copyWith(color: viz.inkMuted),
                     ),
@@ -190,8 +257,8 @@ class _MonthSpendSheetState extends State<MonthSpendSheet> {
           if (_meses.isEmpty) ...[
             const SizedBox(height: 24),
             Text(
-              'Nenhum jogo tem data de compra ainda. Preencha a data na ficha '
-              'e as compras aparecem aqui, mês a mês.',
+              'Nenhum jogo ou extra tem data de compra ainda. Preencha a data '
+              'na ficha e as compras aparecem aqui, mês a mês.',
               textAlign: TextAlign.center,
               style: text.bodySmall,
             ),
@@ -212,18 +279,10 @@ class _MonthSpendSheetState extends State<MonthSpendSheet> {
             Flexible(
               child: ListView.separated(
                 shrinkWrap: true,
-                itemCount: itens.length,
+                itemCount: linhas.length,
                 separatorBuilder: (_, __) =>
                     Divider(height: 1, color: viz.gridline),
-                itemBuilder: (_, k) => _LinhaDeCompra(
-                  entry: itens[k],
-                  onTap: widget.onAbrirJogo == null
-                      ? null
-                      : () {
-                          Navigator.of(context).pop();
-                          widget.onAbrirJogo!(itens[k].id);
-                        },
-                ),
+                itemBuilder: (_, k) => linhas[k].linha,
               ),
             ),
           ],
@@ -332,6 +391,69 @@ class _LinhaDeCompra extends StatelessWidget {
             const SizedBox(width: 10),
             Text(
               dinheiro(g.totalInvested),
+              style: text.bodyMedium?.copyWith(
+                color: viz.inkPrimary,
+                fontWeight: FontWeight.w600,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Compra avulsa no meio das compras do mês, com o tipo no lugar da capa.
+class _LinhaDeExtra extends StatelessWidget {
+  const _LinhaDeExtra({required this.extra, required this.onTap});
+
+  final Extra extra;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final viz = context.viz;
+    final text = Theme.of(context).textTheme;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: viz.serie(1).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(extra.kind.icon, size: 18, color: viz.inkPrimary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    extra.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.bodyMedium?.copyWith(color: viz.inkPrimary),
+                  ),
+                  Text(
+                    '${extra.kind.label.toLowerCase()} · avulso',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: text.labelSmall?.copyWith(color: viz.inkMuted),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              dinheiro(extra.price),
               style: text.bodyMedium?.copyWith(
                 color: viz.inkPrimary,
                 fontWeight: FontWeight.w600,

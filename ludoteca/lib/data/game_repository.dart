@@ -1,8 +1,11 @@
 ﻿import 'package:sqflite/sqflite.dart';
 
+import '../models/extra.dart';
 import '../models/game.dart';
 import '../models/play.dart';
 import '../models/play_score.dart';
+import '../models/suggestion.dart';
+import '../models/trade.dart';
 import '../utils/format.dart';
 import '../services/game_catalog.dart';
 import 'database.dart';
@@ -313,9 +316,10 @@ class GameRepository {
 
   /// Marca a saída do jogo da coleção.
   ///
-  /// Numa **troca**, o valor investido migra para o jogo que entrou: ele foi
-  /// pago com o que você já tinha, e sem transferir isso o novo jogo nasceria
-  /// com custo zero e um custo por partida irreal.
+  /// Venda e doação saem por aqui. A **troca** é encaminhada para
+  /// [registrarTroca], que sabe dividir o valor entre vários jogos — este
+  /// atalho de um-por-um continua existindo porque é o caso mais comum e
+  /// porque a ficha do jogo já chamava assim.
   Future<void> registrarSaida({
     required Game jogo,
     required Disposal tipo,
@@ -323,50 +327,164 @@ class GameRepository {
     DateTime? quando,
     int? trocadoPorId,
   }) async {
+    if (tipo == Disposal.trocado) {
+      await registrarTroca(
+        saindo: [jogo],
+        entrando: trocadoPorId == null
+            ? const []
+            : [TrocaEntrada(gameId: trocadoPorId)],
+        quando: quando,
+      );
+      return;
+    }
+
     final db = await _db;
+    await db.update(
+      'games',
+      {
+        'disposal_kind': tipo.dbValue,
+        'traded_for_id': null,
+        'sold': 1,
+        'sold_price': tipo == Disposal.vendido ? valorRecebido : null,
+        'sold_date': isoData(quando ?? DateTime.now()),
+      },
+      where: 'id = ?',
+      whereArgs: [jogo.id],
+    );
+  }
 
-    await db.transaction((txn) async {
-      await txn.update(
-        'games',
-        {
-          'disposal_kind': tipo.dbValue,
-          'traded_for_id': tipo == Disposal.trocado ? trocadoPorId : null,
-          'sold': 1,
-          'sold_price': tipo == Disposal.vendido ? valorRecebido : null,
-          'sold_date': isoData(quando ?? DateTime.now()),
-        },
-        where: 'id = ?',
-        whereArgs: [jogo.id],
-      );
+  /// Registra uma troca de N jogos por M jogos.
+  ///
+  /// O investimento somado dos que saíram é **dividido** entre os que entraram,
+  /// na proporção do que cada um vale (ver [rateio]): 500 trocados por um jogo
+  /// de 300 e um de 100 deixam 375 no primeiro e 125 no segundo. O valor de
+  /// referência é peso, não dinheiro pago — quem pagou a conta foi o jogo que
+  /// saiu, e por isso o preço do que entrou é **substituído**, não somado.
+  ///
+  /// Quem entra deixa de ser desejado e ganha a data da troca como data de
+  /// compra: ele está na estante desde hoje, e sem data não existe custo por
+  /// mês. O estado anterior de cada ponta fica gravado em `trade_games`, que é
+  /// o que [desfazerTroca] devolve.
+  ///
+  /// [entrando] vazio é um caso legítimo: "troquei, mas ainda não cadastrei o
+  /// que recebi". Os jogos saem da estante e o valor fica esperando; apontar
+  /// depois é refazer a troca.
+  Future<int> registrarTroca({
+    required List<Game> saindo,
+    List<TrocaEntrada> entrando = const [],
+    DateTime? quando,
+  }) async {
+    assert(saindo.isNotEmpty, 'uma troca precisa de pelo menos um jogo saindo');
+    final db = await _db;
+    final dia = isoData(quando ?? DateTime.now());
 
-      if (tipo != Disposal.trocado || trocadoPorId == null) return;
+    return db.transaction((txn) async {
+      final tradeId = await txn.insert('trades', {'traded_at': dia});
 
-      final destino = await txn.query(
-        'games',
-        where: 'id = ?',
-        whereArgs: [trocadoPorId],
-        limit: 1,
-      );
-      if (destino.isEmpty) return;
+      var total = 0.0;
+      for (final jogo in saindo) {
+        total += jogo.totalInvested;
+        await txn.update(
+          'games',
+          {
+            'disposal_kind': Disposal.trocado.dbValue,
+            // Uma ponta só, para um backup restaurado numa versão anterior
+            // ainda dizer o essencial. Quem manda é `trade_games`.
+            'traded_for_id': entrando.isEmpty ? null : entrando.first.gameId,
+            'sold': 1,
+            // Troca não devolve dinheiro; um número aqui viraria "recuperado".
+            'sold_price': null,
+            'sold_date': dia,
+          },
+          where: 'id = ?',
+          whereArgs: [jogo.id],
+        );
+        await txn.insert('trade_games', {
+          'trade_id': tradeId,
+          'game_id': jogo.id,
+          'side': 'saiu',
+          'price_before': jogo.price,
+          'ownership_before': jogo.ownership.dbValue,
+          'purchase_before':
+              jogo.purchaseDate == null ? null : isoData(jogo.purchaseDate!),
+        });
+      }
 
-      final novo = Game.fromMap(destino.first);
-      await txn.update(
-        'games',
-        {'price': novo.price + jogo.totalInvested},
-        where: 'id = ?',
-        whereArgs: [trocadoPorId],
-      );
+      if (entrando.isEmpty) return tradeId;
+
+      final destinos = <Game>[];
+      for (final e in entrando) {
+        final linhas = await txn.query(
+          'games',
+          where: 'id = ?',
+          whereArgs: [e.gameId],
+          limit: 1,
+        );
+        // Jogo apagado entre escolher e confirmar: a troca continua válida
+        // para os outros, em vez de falhar inteira.
+        if (linhas.isNotEmpty) destinos.add(Game.fromMap(linhas.first));
+      }
+      if (destinos.isEmpty) return tradeId;
+
+      final pesos = [
+        for (final d in destinos)
+          entrando
+                  .firstWhere((e) => e.gameId == d.id)
+                  .valorReferencia ??
+              d.price,
+      ];
+      final partes = rateio(total, pesos);
+
+      for (var i = 0; i < destinos.length; i++) {
+        final d = destinos[i];
+        await txn.update(
+          'games',
+          {
+            'price': partes[i],
+            'ownership': null,
+            'purchase_date': d.purchaseDate == null
+                ? dia
+                : isoData(d.purchaseDate!),
+          },
+          where: 'id = ?',
+          whereArgs: [d.id],
+        );
+        await txn.insert('trade_games', {
+          'trade_id': tradeId,
+          'game_id': d.id,
+          'side': 'entrou',
+          'price_before': d.price,
+          'ownership_before': d.ownership.dbValue,
+          'purchase_before':
+              d.purchaseDate == null ? null : isoData(d.purchaseDate!),
+          'ref_value': pesos[i],
+          'share': partes[i],
+        });
+      }
+
+      return tradeId;
     });
   }
 
   /// Desfaz a saída e devolve o jogo para a estante.
   ///
-  /// Numa troca desfeita, o valor volta do jogo que tinha entrado — senão o
-  /// dinheiro apareceria contado duas vezes.
+  /// Se o jogo entrou numa troca registrada, desfaz a **troca inteira**: as
+  /// duas pontas voltam ao que eram. Desfazer só um lado deixaria o valor
+  /// investido contado duas vezes, na estante e no jogo que entrou.
   Future<void> desfazerSaida(Game jogo) async {
-    final db = await _db;
+    // Só a troca em que ele **saiu**: um jogo que chegou numa troca antiga e
+    // foi vendido depois não pode ter a troca antiga desmanchada no lugar da
+    // venda.
+    final tradeId = await _trocaDoJogo(jogo.id!, lado: 'saiu');
+    if (tradeId != null) {
+      await desfazerTroca(tradeId);
+      return;
+    }
 
+    final db = await _db;
     await db.transaction((txn) async {
+      // Troca vinda de um backup restaurado: sem registro em `trade_games`, o
+      // único jeito de devolver o valor é subtrair de onde ele foi somado.
       if (jogo.disposal == Disposal.trocado && jogo.tradedForId != null) {
         final destino = await txn.query(
           'games',
@@ -386,7 +504,45 @@ class GameRepository {
         }
       }
 
-      await txn.update(
+      await _limpaSaida(txn, jogo.id!);
+    });
+  }
+
+  /// Desmancha a troca: cada jogo volta ao preço, ao tipo e à data que tinha.
+  Future<void> desfazerTroca(int tradeId) async {
+    final db = await _db;
+
+    await db.transaction((txn) async {
+      final pontas = await txn.query(
+        'trade_games',
+        where: 'trade_id = ?',
+        whereArgs: [tradeId],
+      );
+
+      for (final p in pontas) {
+        final gameId = p['game_id'] as int;
+        if (p['side'] == 'saiu') {
+          await _limpaSaida(txn, gameId);
+          continue;
+        }
+        await txn.update(
+          'games',
+          {
+            'price': (p['price_before'] as num?)?.toDouble() ?? 0,
+            'ownership': p['ownership_before'],
+            'purchase_date': p['purchase_before'],
+          },
+          where: 'id = ?',
+          whereArgs: [gameId],
+        );
+      }
+
+      // As pontas somem por cascata.
+      await txn.delete('trades', where: 'id = ?', whereArgs: [tradeId]);
+    });
+  }
+
+  Future<void> _limpaSaida(DatabaseExecutor txn, int gameId) => txn.update(
         'games',
         {
           'disposal_kind': null,
@@ -396,9 +552,138 @@ class GameRepository {
           'sold_date': null,
         },
         where: 'id = ?',
-        whereArgs: [jogo.id],
+        whereArgs: [gameId],
       );
+
+  /// A troca mais recente de que este jogo participou. [lado] restringe a
+  /// 'saiu' ou 'entrou'; nulo aceita qualquer um.
+  Future<int?> _trocaDoJogo(int gameId, {String? lado}) async {
+    final db = await _db;
+    final linhas = await db.query(
+      'trade_games',
+      columns: ['trade_id'],
+      where: lado == null ? 'game_id = ?' : 'game_id = ? AND side = ?',
+      whereArgs: lado == null ? [gameId] : [gameId, lado],
+      orderBy: 'trade_id DESC',
+      limit: 1,
+    );
+    return linhas.isEmpty ? null : linhas.first['trade_id'] as int;
+  }
+
+  /// A troca de que este jogo participou, com nome das duas pontas.
+  ///
+  /// Alimenta a ficha: "virou Dune Imperium e Ark Nova" diz mais que "valor
+  /// transferido", e do outro lado "veio da troca de Scythe" explica um preço
+  /// que o usuário nunca digitou.
+  Future<Trade?> tradeDeJogo(int gameId) async {
+    final tradeId = await _trocaDoJogo(gameId);
+    if (tradeId == null) return null;
+
+    final db = await _db;
+    final cabecalho = await db.query(
+      'trades',
+      where: 'id = ?',
+      whereArgs: [tradeId],
+      limit: 1,
+    );
+    if (cabecalho.isEmpty) return null;
+
+    final linhas = await db.rawQuery('''
+      SELECT tg.*, g.name, g.name_pt
+      FROM trade_games tg
+      JOIN games g ON g.id = tg.game_id
+      WHERE tg.trade_id = ?
+    ''', [tradeId]);
+
+    TradeParte parte(Map<String, Object?> r) {
+      final pt = (r['name_pt'] as String?)?.trim();
+      return TradeParte(
+        gameId: r['game_id'] as int,
+        nome: (pt == null || pt.isEmpty) ? r['name'] as String : pt,
+        precoAntes: (r['price_before'] as num?)?.toDouble() ?? 0,
+        valorReferencia: (r['ref_value'] as num?)?.toDouble(),
+        parte: (r['share'] as num?)?.toDouble(),
+      );
+    }
+
+    return Trade(
+      id: tradeId,
+      quando: parseIsoData(cabecalho.first['traded_at'] as String?) ??
+          DateTime.now(),
+      saiu: [
+        for (final r in linhas)
+          if (r['side'] == 'saiu') parte(r),
+      ],
+      entrou: [
+        for (final r in linhas)
+          if (r['side'] == 'entrou') parte(r),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------------- sugestões
+
+  /// Ideias de melhoria do app, das mais novas para as mais velhas, com as
+  /// já feitas no fim — o que ainda falta é o que interessa ao abrir a lista.
+  Future<List<Suggestion>> suggestions() async {
+    final db = await _db;
+    final linhas = await db.query(
+      'suggestions',
+      orderBy: 'done ASC, id DESC',
+    );
+    return linhas.map(Suggestion.fromMap).toList();
+  }
+
+  Future<int> addSuggestion(String texto) async {
+    final db = await _db;
+    return db.insert('suggestions', {
+      'text': texto.trim(),
+      'created_at': isoData(DateTime.now()),
+      'done': 0,
     });
+  }
+
+  Future<void> setSuggestionDone(int id, bool feito) async {
+    final db = await _db;
+    await db.update(
+      'suggestions',
+      {'done': feito ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> deleteSuggestion(int id) async {
+    final db = await _db;
+    await db.delete('suggestions', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------------------------------------------------------------- extras
+
+  /// Compras avulsas (kits, playmats), das mais recentes para as mais velhas.
+  Future<List<Extra>> extras() async {
+    final db = await _db;
+    final linhas = await db.query(
+      'extras',
+      orderBy: 'purchase_date IS NULL, purchase_date DESC, id DESC',
+    );
+    return linhas.map(Extra.fromMap).toList();
+  }
+
+  Future<int> insertExtra(Extra extra) async {
+    final db = await _db;
+    return db.insert('extras', extra.toMap()..remove('id'));
+  }
+
+  Future<void> updateExtra(Extra extra) async {
+    final db = await _db;
+    await db.update('extras', extra.toMap()..remove('id'),
+        where: 'id = ?', whereArgs: [extra.id]);
+  }
+
+  Future<void> deleteExtra(int id) async {
+    final db = await _db;
+    await db.delete('extras', where: 'id = ?', whereArgs: [id]);
   }
 
   // ------------------------------------------------------------------- tags
@@ -515,6 +800,37 @@ class GameRepository {
     return rows.map(Game.fromMap).toList();
   }
 
+  /// Jogos sem capa **ou** sem etiqueta.
+  ///
+  /// Os dois buracos vêm da mesma origem — jogo digitado à mão ou importado da
+  /// planilha nasce sem imagem e sem tema — e a mesma consulta ao catálogo
+  /// preenche os dois. Varrer a coleção duas vezes seria o dobro de espera e o
+  /// dobro de requisição para o mesmo resultado.
+  Future<List<Game>> gamesSemCapaOuTema() async {
+    final db = await _db;
+    final rows = await db.rawQuery('''
+      SELECT g.* FROM games g
+      WHERE NOT EXISTS (SELECT 1 FROM game_tags gt WHERE gt.game_id = g.id)
+         OR ((g.image_url IS NULL OR g.image_url = '')
+             AND (g.thumb_url IS NULL OR g.thumb_url = ''))
+      ORDER BY g.name COLLATE NOCASE
+    ''');
+    return rows.map(Game.fromMap).toList();
+  }
+
+  /// Quantos jogos estão sem capa nenhuma. Alimenta o texto do cartão em
+  /// Ajustes — "45 jogos sem capa" é o que faz a pessoa entender por que a
+  /// lista virou uma coluna de iniciais.
+  Future<int> countGamesSemCapa() async {
+    final db = await _db;
+    final r = await db.rawQuery('''
+      SELECT COUNT(*) AS total FROM games
+      WHERE (image_url IS NULL OR image_url = '')
+        AND (thumb_url IS NULL OR thumb_url = '')
+    ''');
+    return (r.first['total'] as int?) ?? 0;
+  }
+
   // --------------------------------------------------------------- settings
 
   /// Chaves usadas na tabela `settings`.
@@ -570,11 +886,14 @@ class GameRepository {
     final db = await _db;
     final games = await db.query('games');
     final plays = await db.query('plays');
+    final extras = await db.query('extras');
     return {
       'schema': 1,
       'exportado_em': DateTime.now().toIso8601String(),
       'jogos': games,
       'partidas': plays,
+      // Backup antigo não tem esta chave; a restauração trata como "nenhum".
+      'extras': extras,
     };
   }
 
@@ -587,6 +906,7 @@ class GameRepository {
   ) async {
     final jogos = (data['jogos'] as List?) ?? const [];
     final partidas = (data['partidas'] as List?) ?? const [];
+    final extras = (data['extras'] as List?) ?? const [];
 
     final db = await _db;
     var nJogos = 0;
@@ -595,6 +915,9 @@ class GameRepository {
     await db.transaction((txn) async {
       await txn.delete('plays');
       await txn.delete('games');
+      // As pontas caem por cascata com os jogos; a troca em si ficaria órfã.
+      await txn.delete('trades');
+      await txn.delete('extras');
 
       // Duas passadas: primeiro todos os jogos sem vínculo, depois os
       // `parent_id`. Religar durante a inserção estouraria a chave
@@ -623,6 +946,10 @@ class GameRepository {
       for (final raw in partidas) {
         await txn.insert('plays', Map<String, Object?>.from(raw as Map));
         nPartidas++;
+      }
+
+      for (final raw in extras) {
+        await txn.insert('extras', Map<String, Object?>.from(raw as Map));
       }
     });
 

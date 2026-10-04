@@ -16,10 +16,13 @@ CatalogTag _mec(String n) => CatalogTag(name: n, kind: TagKind.mecanica);
 
 /// Catálogo falso: devolve o que o teste mandar, sem rede.
 class _CatalogoFake implements GameCatalog {
-  _CatalogoFake(this.porNome);
+  _CatalogoFake(this.porNome, {this.capas = const {}});
 
   /// nome buscado -> (nome encontrado, tags). Ausente = não achou.
   final Map<String, ({String nome, List<CatalogTag> tags})> porNome;
+
+  /// nome buscado -> endereço da capa que o catálogo tem para ele.
+  final Map<String, String> capas;
 
   int buscas = 0;
   int fichas = 0;
@@ -54,6 +57,8 @@ class _CatalogoFake implements GameCatalog {
       id: id,
       name: entrada.value.nome,
       tags: entrada.value.tags,
+      imageUrl: capas[entrada.key],
+      thumbUrl: capas[entrada.key],
     );
   }
 
@@ -380,8 +385,10 @@ void main() {
       expect(r.aproximados, isEmpty);
     });
 
-    test('não mexe em quem já tem etiqueta', () async {
-      final jaTem = await repo.insertGame(const Game(name: 'Pandemic'));
+    test('não mexe em quem já tem etiqueta e capa', () async {
+      final jaTem = await repo.insertGame(
+        const Game(name: 'Pandemic', thumbUrl: 'https://capa/pandemic.jpg'),
+      );
       await repo.setGameTags(jaTem, [_tema('Meu tema')]);
 
       final catalogo = _CatalogoFake({
@@ -397,6 +404,64 @@ void main() {
       expect(catalogo.buscas, 0, reason: 'nem devia ter ido à rede');
       final tags = await repo.tagsFor(jaTem);
       expect(tags.single.name, 'Meu tema');
+    });
+
+    test('quem tem tema mas está sem capa entra na varredura', () async {
+      // O caso real: a coleção veio da planilha, os temas foram preenchidos
+      // numa passada anterior, e a lista continua uma coluna de iniciais.
+      final id = await repo.insertGame(const Game(name: 'Pandemic'));
+      await repo.setGameTags(id, [_tema('Meu tema')]);
+
+      final r = await TagBackfillService(
+        catalogo: _CatalogoFake(
+          {'Pandemic': (nome: 'Pandemic', tags: [_tema('Médico')])},
+          capas: {'Pandemic': 'https://capa/pandemic.jpg'},
+        ),
+        repository: repo,
+        pausa: Duration.zero,
+      ).run();
+
+      expect((await repo.gameById(id))!.thumbUrl, 'https://capa/pandemic.jpg');
+      expect(r.capas, 1);
+    });
+
+    test('a capa que você escolheu não é sobrescrita', () async {
+      // Trocar a imagem à mão é uma decisão; uma varredura em lote não pode
+      // desfazê-la sem avisar.
+      final id = await repo.insertGame(
+        const Game(name: 'Pandemic', imageUrl: 'https://minha/capa.jpg'),
+      );
+
+      await TagBackfillService(
+        catalogo: _CatalogoFake(
+          {'Pandemic': (nome: 'Pandemic', tags: [_tema('Médico')])},
+          capas: {'Pandemic': 'https://catalogo/outra.jpg'},
+        ),
+        repository: repo,
+        pausa: Duration.zero,
+      ).run();
+
+      expect((await repo.gameById(id))!.imageUrl, 'https://minha/capa.jpg');
+    });
+
+    test('sem tema no catálogo, a capa entra assim mesmo', () async {
+      // Os dois dados são independentes: sair sem a imagem só porque faltou
+      // etiqueta deixaria as iniciais na tela à toa.
+      final id = await repo.insertGame(const Game(name: 'Chapolin'));
+
+      final r = await TagBackfillService(
+        catalogo: _CatalogoFake(
+          {'Chapolin': (nome: 'Chapolin', tags: <CatalogTag>[])},
+          capas: {'Chapolin': 'https://capa/chapolin.jpg'},
+        ),
+        repository: repo,
+        pausa: Duration.zero,
+      ).run();
+
+      expect((await repo.gameById(id))!.thumbUrl, 'https://capa/chapolin.jpg');
+      expect(r.capas, 1);
+      expect(r.preenchidos, 1);
+      expect(r.problemas, isEmpty);
     });
 
     test('relata progresso a cada jogo', () async {

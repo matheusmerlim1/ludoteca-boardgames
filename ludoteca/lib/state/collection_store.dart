@@ -2,9 +2,12 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/game_repository.dart';
+import '../models/extra.dart';
 import '../models/game.dart';
 import '../models/play.dart';
 import '../models/play_score.dart';
+import '../models/suggestion.dart';
+import '../models/trade.dart';
 import '../services/game_catalog.dart';
 import '../utils/format.dart';
 
@@ -66,6 +69,14 @@ class CollectionStore extends ChangeNotifier {
   String? _bggToken;
   String? get bggToken => _bggToken;
   bool get hasBggToken => _bggToken != null && _bggToken!.isNotEmpty;
+
+  /// Nome de usuário no Comparajogos, para ler as listas públicas de lá.
+  ///
+  /// Fica em memória junto do resto porque a tela precisa dele **na hora do
+  /// toque**: ir ao banco para saber se pergunta ou não atrasa a abertura da
+  /// folha por um dado que muda uma vez na vida.
+  String? _comparajogosUser;
+  String? get comparajogosUser => _comparajogosUser;
 
   /// Etiquetas existentes, com contagem, e quais cada jogo tem.
   List<TagCount> _tags = const [];
@@ -221,7 +232,11 @@ class CollectionStore extends ChangeNotifier {
       final vivos = {for (final t in _tags) t.id};
       _tagFilter = _tagFilter.intersection(vivos);
       _reindexa();
+      _suggestions = await _repo.suggestions();
+      _extras = await _repo.extras();
       _bggToken = await _repo.getSetting(GameRepository.keyBggToken);
+      _comparajogosUser =
+          await _repo.getSetting(GameRepository.keyComparajogosUser);
       await _carregarMetas();
       _error = null;
     } catch (e) {
@@ -230,6 +245,13 @@ class CollectionStore extends ChangeNotifier {
       _loading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> setComparajogosUser(String? nome) async {
+    await _repo.setSetting(GameRepository.keyComparajogosUser, nome);
+    _comparajogosUser =
+        (nome == null || nome.trim().isEmpty) ? null : nome.trim();
+    notifyListeners();
   }
 
   Future<void> setBggToken(String? token) async {
@@ -275,6 +297,7 @@ class CollectionStore extends ChangeNotifier {
   Future<void> refresh() async {
     try {
       _entries = await _repo.loadEntries();
+      _extras = await _repo.extras();
       _tags = await _repo.loadTags();
       _tagsPorJogo = await _repo.loadGameTagIds();
       _todasPartidas = await _repo.allPlays();
@@ -568,10 +591,13 @@ class CollectionStore extends ChangeNotifier {
   Future<Map<int, List<PlayScore>>> scoresForPlays(List<int> ids) =>
       _repo.scoresForPlays(ids);
 
-  Future<void> logPlay(Play play, {List<PlayScore> placar = const []}) async {
+  /// Grava a partida e devolve o id dela — quem chamou usa para oferecer o
+  /// "desfazer" no aviso, sem ter de procurar a partida recém-criada.
+  Future<int> logPlay(Play play, {List<PlayScore> placar = const []}) async {
     final id = await _repo.insertPlay(play);
     if (placar.isNotEmpty) await _repo.setScores(id, placar);
     await refresh();
+    return id;
   }
 
   Future<void> updatePlay(Play play, {List<PlayScore>? placar}) async {
@@ -599,9 +625,89 @@ class CollectionStore extends ChangeNotifier {
     await refresh();
   }
 
+  /// Registra uma troca de N jogos por M jogos, com o valor investido
+  /// dividido entre os que entraram (ver [GameRepository.registrarTroca]).
+  Future<int> registrarTroca({
+    required List<Game> saindo,
+    List<TrocaEntrada> entrando = const [],
+    DateTime? quando,
+  }) async {
+    final id = await _repo.registrarTroca(
+      saindo: saindo,
+      entrando: entrando,
+      quando: quando,
+    );
+    await refresh();
+    return id;
+  }
+
   Future<void> desfazerSaida(Game jogo) async {
     await _repo.desfazerSaida(jogo);
     await refresh();
+  }
+
+  Future<void> desfazerTroca(int tradeId) async {
+    await _repo.desfazerTroca(tradeId);
+    await refresh();
+  }
+
+  /// A troca de que este jogo participou, para a ficha explicar o preço.
+  Future<Trade?> tradeDeJogo(int gameId) => _repo.tradeDeJogo(gameId);
+
+  // ---------------------------------------------------------------- extras
+
+  /// Compras avulsas que não são de um jogo (kit de sleeves, playmat...).
+  List<Extra> _extras = const [];
+  List<Extra> get extras => _extras;
+
+  Future<void> _recarregaExtras() async {
+    _extras = await _repo.extras();
+    notifyListeners();
+  }
+
+  Future<void> addExtra(Extra extra) async {
+    await _repo.insertExtra(extra);
+    await _recarregaExtras();
+  }
+
+  Future<void> updateExtra(Extra extra) async {
+    await _repo.updateExtra(extra);
+    await _recarregaExtras();
+  }
+
+  Future<void> deleteExtra(int id) async {
+    await _repo.deleteExtra(id);
+    await _recarregaExtras();
+  }
+
+  // ------------------------------------------------------------- sugestões
+
+  List<Suggestion> _suggestions = const [];
+  List<Suggestion> get suggestions => _suggestions;
+
+  /// Quantas ideias ainda não foram feitas — o número que a aba de Ajustes
+  /// mostra sem precisar abrir a lista.
+  int get suggestionsAbertas => _suggestions.where((s) => !s.done).length;
+
+  Future<void> carregarSugestoes() async {
+    _suggestions = await _repo.suggestions();
+    notifyListeners();
+  }
+
+  Future<void> addSugestao(String texto) async {
+    if (texto.trim().isEmpty) return;
+    await _repo.addSuggestion(texto);
+    await carregarSugestoes();
+  }
+
+  Future<void> marcarSugestao(int id, bool feita) async {
+    await _repo.setSuggestionDone(id, feita);
+    await carregarSugestoes();
+  }
+
+  Future<void> removerSugestao(int id) async {
+    await _repo.deleteSuggestion(id);
+    await carregarSugestoes();
   }
 
   Future<void> deletePlay(int playId) async {

@@ -11,6 +11,7 @@ class BackfillItem {
     required this.outcome,
     this.matchedName,
     this.tagCount = 0,
+    this.capaPreenchida = false,
   });
 
   final Game game;
@@ -21,6 +22,9 @@ class BackfillItem {
   final String? matchedName;
 
   final int tagCount;
+
+  /// A capa deste jogo veio nesta passada.
+  final bool capaPreenchida;
 }
 
 class BackfillReport {
@@ -31,6 +35,8 @@ class BackfillReport {
 
   int get preenchidos =>
       itens.where((i) => i.outcome == BackfillOutcome.preenchido).length;
+
+  int get capas => itens.where((i) => i.capaPreenchida).length;
 
   List<BackfillItem> get problemas => itens
       .where((i) => i.outcome != BackfillOutcome.preenchido)
@@ -49,11 +55,14 @@ class BackfillReport {
       s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
 }
 
-/// Busca temas e mecânicas para os jogos que ainda não têm.
+/// Busca **capa**, tema e mecânica para os jogos que ainda não têm.
 ///
 /// Existe porque um filtro por tema nasce inútil numa coleção já cadastrada:
 /// sessenta e cinco jogos digitados à mão não têm etiqueta nenhuma, e
-/// preencher um a um não é trabalho que se peça a alguém.
+/// preencher um a um não é trabalho que se peça a alguém. A capa entra na mesma
+/// varredura porque vem na **mesma consulta** que já era feita: um jogo
+/// digitado à mão (ou vindo da planilha) chega sem imagem, e a lista inteira
+/// vira uma coluna de iniciais — que é o sintoma mais visível de todos.
 ///
 /// O casamento é **por nome**, então pode errar. Por isso o relatório separa os
 /// casos em que o nome encontrado difere do seu — são exatamente esses que
@@ -78,7 +87,7 @@ class TagBackfillService {
 
   /// [onProgress] recebe (feitos, total) para a tela mostrar andamento.
   ///
-  /// Com [todos], rebusca também quem já tem etiqueta. Serve para quando o app
+  /// Com [todos], rebusca também quem já está completo. Serve para quando o app
   /// passa a ler um campo novo do catálogo — o estilo, por exemplo — e os jogos
   /// preenchidos numa versão anterior ficariam sem ele para sempre.
   Future<BackfillReport> run({
@@ -89,7 +98,7 @@ class TagBackfillService {
 
     final pendentes = todos
         ? await repository.allGames()
-        : await repository.gamesWithoutTags();
+        : await repository.gamesSemCapaOuTema();
     final itens = <BackfillItem>[];
 
     for (var i = 0; i < pendentes.length; i++) {
@@ -122,11 +131,20 @@ class TagBackfillService {
       final escolhido = resultados.first;
       final ficha = await catalogo.details(escolhido.id);
 
+      // A capa é gravada mesmo quando o catálogo não tem tema nenhum para o
+      // jogo: são dois dados independentes, e sair daqui sem a imagem só
+      // porque faltou etiqueta deixaria a lista com as iniciais à toa.
+      final capa = await _gravaCapaSeFaltar(jogo, ficha);
+
       if (ficha.tags.isEmpty) {
         return BackfillItem(
           game: jogo,
-          outcome: BackfillOutcome.semTags,
+          // Com a capa preenchida, a passada valeu — chamar isso de problema
+          // mandaria o usuário conferir um jogo que não tem o que conferir.
+          outcome:
+              capa ? BackfillOutcome.preenchido : BackfillOutcome.semTags,
           matchedName: ficha.name,
+          capaPreenchida: capa,
         );
       }
 
@@ -137,11 +155,33 @@ class TagBackfillService {
         outcome: BackfillOutcome.preenchido,
         matchedName: ficha.name,
         tagCount: ficha.tags.length,
+        capaPreenchida: capa,
       );
     } on CatalogException {
       return BackfillItem(game: jogo, outcome: BackfillOutcome.falhou);
     } catch (_) {
       return BackfillItem(game: jogo, outcome: BackfillOutcome.falhou);
     }
+  }
+
+  /// Grava a capa só quando o jogo não tem nenhuma.
+  ///
+  /// Nunca sobrescreve: se você trocou a imagem à mão, foi de propósito, e uma
+  /// varredura em lote não pode desfazer isso sem avisar.
+  Future<bool> _gravaCapaSeFaltar(Game jogo, CatalogGameDetails ficha) async {
+    final temCapa = (jogo.imageUrl?.isNotEmpty ?? false) ||
+        (jogo.thumbUrl?.isNotEmpty ?? false);
+    final achou = (ficha.imageUrl?.isNotEmpty ?? false) ||
+        (ficha.thumbUrl?.isNotEmpty ?? false);
+    if (temCapa || !achou) return false;
+
+    await repository.updateGame(jogo.copyWith(
+      imageUrl: ficha.imageUrl,
+      thumbUrl: ficha.thumbUrl,
+      // O id do BGG vem de graça na mesma ficha e é o que permite cruzar este
+      // jogo com o catálogo depois sem depender do nome.
+      bggId: jogo.bggId ?? ficha.bggId,
+    ));
+    return true;
   }
 }

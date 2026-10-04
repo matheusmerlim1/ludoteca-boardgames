@@ -23,11 +23,21 @@ import 'game_form_screen.dart';
 /// O caminho feliz é: digitar o nome, tocar no jogo, conferir o preço e salvar.
 /// Nome, capa, número de jogadores, duração e peso vêm preenchidos.
 class AddGameScreen extends StatefulWidget {
-  const AddGameScreen({super.key, this.ownershipInicial});
+  const AddGameScreen({
+    super.key,
+    this.ownershipInicial,
+    this.anunciarSalvo = true,
+  });
 
   /// Tipo já definido por quem chamou. Vem preenchido quando esta tela é
   /// aberta pelo fluxo de registrar a partida de um jogo que não é seu.
   final Ownership? ownershipInicial;
+
+  /// Falso quando o cadastro é meio de caminho para outra coisa — registrar a
+  /// partida, apontar o jogo que entrou numa troca. Nesses fluxos, avisar que
+  /// "o jogo entrou na coleção" descreve um passo intermediário como se fosse
+  /// o resultado, e quem chamou dá o aviso certo no fim.
+  final bool anunciarSalvo;
 
   @override
   State<AddGameScreen> createState() => _AddGameScreenState();
@@ -371,6 +381,7 @@ class _AddGameScreenState extends State<AddGameScreen> {
         builder: (_) => GameFormScreen(
           fromBgg: detalhes,
           ownershipInicial: widget.ownershipInicial,
+          anunciarSalvo: widget.anunciarSalvo,
         ),
       ),
     );
@@ -493,6 +504,7 @@ class _AddGameScreenState extends State<AddGameScreen> {
       MaterialPageRoute<int>(
         builder: (_) => GameFormScreen(
           ownershipInicial: widget.ownershipInicial,
+          anunciarSalvo: widget.anunciarSalvo,
         ),
       ),
     );

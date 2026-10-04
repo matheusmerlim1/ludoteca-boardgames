@@ -2,11 +2,17 @@
 import 'package:provider/provider.dart';
 
 import '../models/game.dart';
+import '../services/collection_sync_service.dart';
+import '../services/comparajogos_service.dart';
+import '../services/game_catalog.dart';
 import '../services/share_service.dart';
+import '../services/tag_backfill_service.dart';
 import '../state/collection_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
+import '../widgets/collection_import_sheet.dart';
 import '../widgets/game_card.dart';
+import '../widgets/update_all_sheet.dart';
 import '../widgets/log_play_sheet.dart';
 import '../widgets/pick_game_sheet.dart';
 import '../widgets/tag_filter_sheet.dart';
@@ -27,6 +33,16 @@ class _CollectionScreenState extends State<CollectionScreen> {
   /// jogos é o que se quer ver ao abrir o app. O botão marca quantos filtros
   /// estão ligados, então nada fica escondido sem aviso.
   bool _filtrosAbertos = false;
+
+  /// Busca das capas que faltam, com andamento.
+  TagBackfillService? _buscaDeCapas;
+  int _capasFeitas = 0;
+  int _capasTotal = 0;
+
+  /// "Agora não" some com a faixa até a próxima abertura. Sem isso, um jogo
+  /// que o catálogo simplesmente não conhece deixaria o aviso na tela para
+  /// sempre — e aviso que não sai de perto vira ruído, não informação.
+  bool _faixaCapasOculta = false;
 
   @override
   void dispose() {
@@ -50,6 +66,11 @@ class _CollectionScreenState extends State<CollectionScreen> {
           child: Container(height: 1, color: viz.gridline),
         ),
         actions: [
+          IconButton(
+            onPressed: () => _atualizarTudo(context, store),
+            icon: const Icon(Icons.sync),
+            tooltip: 'Atualizar tudo',
+          ),
           IconButton(
             onPressed: () => _compartilharColecao(context, store),
             icon: const Icon(Icons.ios_share),
@@ -101,6 +122,22 @@ class _CollectionScreenState extends State<CollectionScreen> {
                   setState(() => _filtrosAbertos = !_filtrosAbertos),
             ),
             Container(height: 1, color: viz.gridline),
+
+            // A falta de capa aparece **aqui**, onde ela incomoda: uma lista de
+            // iniciais é o sintoma, e o conserto tem de estar do lado do
+            // sintoma. Escondido em Ajustes, ninguém liga o problema ao botão.
+            if (!_faixaCapasOculta &&
+                (_buscaDeCapas != null || _semCapa(store) > 0))
+              _FaixaCapas(
+                semCapa: _semCapa(store),
+                rodando: _buscaDeCapas != null,
+                feitos: _capasFeitas,
+                total: _capasTotal,
+                onBuscar: () => _buscarCapas(store),
+                onParar: () => _buscaDeCapas?.cancel(),
+                onFechar: () => setState(() => _faixaCapasOculta = true),
+              ),
+
             Expanded(
               child: _Body(
                 store: store,
@@ -141,6 +178,165 @@ class _CollectionScreenState extends State<CollectionScreen> {
     await servico.compartilhar(texto, assunto: 'Minha coleção de jogos');
   }
 
+  /// Quantos jogos da estante estão sem imagem nenhuma.
+  int _semCapa(CollectionStore store) => store.allEntries
+      .where((e) =>
+          !e.game.isGone &&
+          (e.game.imageUrl?.isEmpty ?? true) &&
+          (e.game.thumbUrl?.isEmpty ?? true))
+      .length;
+
+  /// Busca no catálogo a capa de quem está sem, pelo nome.
+  ///
+  /// É a mesma varredura de Ajustes — o serviço traz capa e tema na mesma
+  /// consulta. Aqui ela ganha um atalho porque este é o lugar onde a ausência
+  /// de capa é vista.
+  Future<void> _buscarCapas(CollectionStore store) async {
+    final catalogo = ComparajogosService();
+    final servico = TagBackfillService(
+      catalogo: catalogo,
+      repository: store.repository,
+    );
+
+    setState(() {
+      _buscaDeCapas = servico;
+      _capasFeitas = 0;
+      _capasTotal = 0;
+    });
+
+    try {
+      final r = await servico.run(
+        onProgress: (feitos, total) {
+          if (!mounted) return;
+          setState(() {
+            _capasFeitas = feitos;
+            _capasTotal = total;
+          });
+        },
+      );
+      await store.refresh();
+      if (!mounted) return;
+
+      final faltam = _semCapa(store);
+      _aviso(
+        context,
+        '${r.capas} ${r.capas == 1 ? 'capa encontrada' : 'capas encontradas'}'
+        '${r.cancelado ? ' (interrompido)' : ''}.'
+        '${faltam > 0 ? ' Ainda faltam $faltam — o catálogo não achou pelo nome; '
+            'dá para cadastrar a capa abrindo o jogo.' : ''}',
+      );
+    } catch (e) {
+      if (mounted) _aviso(context, 'Não deu para buscar as capas: $e');
+    } finally {
+      catalogo.dispose();
+      if (mounted) setState(() => _buscaDeCapas = null);
+    }
+  }
+
+  /// Uma passada em tudo que o app busca de fora.
+  ///
+  /// As três tarefas moravam em três telas — capa e tema em Ajustes, preço na
+  /// aba Quero, coleção do Comparajogos aqui. Quem quer deixar o app em dia não
+  /// quer decorar onde cada uma fica.
+  Future<void> _atualizarTudo(
+    BuildContext context,
+    CollectionStore store,
+  ) async {
+    await AtualizarTudoSheet.show(
+      context,
+      store: store,
+      usuarioSalvo: store.comparajogosUser,
+      onPedirUsuario: () => _pedeUsuarioDoComparajogos(context, store),
+      onImportar: (diff) => _importarDoComparajogos(context, store, diff),
+    );
+  }
+
+  /// Cadastra os jogos escolhidos na caixa de comparação.
+  ///
+  /// Só de lá para cá, e só somando: o app sabe o que o catálogo não sabe —
+  /// quanto você pagou, as partidas, os sleeves — e uma sincronia que apagasse
+  /// levaria isso junto sem aviso.
+  Future<int?> _importarDoComparajogos(
+    BuildContext context,
+    CollectionStore store,
+    CollectionDiff diff,
+  ) async {
+    final escolha = await CollectionImportSheet.show(context, diff: diff);
+    if (escolha == null || escolha.itens.isEmpty || !context.mounted) {
+      return null;
+    }
+
+    final servico = CollectionSyncService(repository: store.repository);
+    try {
+      final n = await servico.importar(
+        escolha.itens,
+        usarPrecoDeReferencia: escolha.usarPreco,
+      );
+      await store.refresh();
+      return n;
+    } on CatalogException catch (e) {
+      if (context.mounted) _aviso(context, e.message);
+      return null;
+    } finally {
+      servico.dispose();
+    }
+  }
+
+  /// Pergunta o nome de usuário do Comparajogos e guarda para as próximas.
+  Future<String?> _pedeUsuarioDoComparajogos(
+    BuildContext context,
+    CollectionStore store,
+  ) async {
+    final controller = TextEditingController();
+    final digitado = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Seu usuário no Comparajogos'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'O app lê apenas as suas listas marcadas como públicas lá. '
+              'Não existe login na API deles, então nenhuma senha é pedida '
+              'nem guardada.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Nome de usuário',
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Comparar'),
+          ),
+        ],
+      ),
+    );
+
+    if (digitado == null || digitado.isEmpty) return null;
+    await store.setComparajogosUser(digitado);
+    return digitado;
+  }
+
+  void _aviso(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 6)),
+    );
+  }
+
   /// Escolher o jogo e registrar a partida, sem passar pela ficha.
   Future<void> _registrarPartida(
     BuildContext context,
@@ -170,8 +366,14 @@ class _CollectionScreenState extends State<CollectionScreen> {
     if (escolha.buscarNoCatalogo) {
       final novoId = await Navigator.of(context).push<int>(
         MaterialPageRoute<int>(
-          builder: (_) =>
-              const AddGameScreen(ownershipInicial: Ownership.jogada),
+          // Sem aviso de "jogo salvo": aqui o cadastro é meio do caminho, não
+          // o que você veio fazer. Anunciar que o jogo entrou numa lista
+          // descrevia uma coisa que não é a que aconteceu — o que conta é a
+          // partida, e é ela que o aviso do fim do fluxo confirma.
+          builder: (_) => const AddGameScreen(
+            ownershipInicial: Ownership.jogada,
+            anunciarSalvo: false,
+          ),
         ),
       );
       if (novoId == null || !context.mounted) return;
@@ -194,7 +396,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
     );
     if (r == null || !context.mounted) return;
 
-    await store.logPlay(r.play, placar: r.placar);
+    final playId = await store.logPlay(r.play, placar: r.placar);
     if (!context.mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -202,6 +404,11 @@ class _CollectionScreenState extends State<CollectionScreen> {
         content: Text(
           'Partida de ${alvo.displayName} '
           'em ${data(r.play.playedAt)} registrada.',
+        ),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'Desfazer',
+          onPressed: () => store.deletePlay(playId),
         ),
       ),
     );
@@ -211,6 +418,80 @@ class _CollectionScreenState extends State<CollectionScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => GameDetailScreen(gameId: gameId),
+      ),
+    );
+  }
+}
+
+/// Faixa que oferece buscar as capas que faltam.
+///
+/// Jogo digitado à mão ou vindo da planilha entra sem imagem, e a lista vira
+/// uma coluna de iniciais. A faixa diz **quantos** estão assim — o número é o
+/// que transforma "que feio isso" em "ah, é só isso" — e resolve num toque.
+class _FaixaCapas extends StatelessWidget {
+  const _FaixaCapas({
+    required this.semCapa,
+    required this.rodando,
+    required this.feitos,
+    required this.total,
+    required this.onBuscar,
+    required this.onParar,
+    required this.onFechar,
+  });
+
+  final int semCapa;
+  final bool rodando;
+  final int feitos;
+  final int total;
+  final VoidCallback onBuscar;
+  final VoidCallback onParar;
+  final VoidCallback onFechar;
+
+  @override
+  Widget build(BuildContext context) {
+    final viz = context.viz;
+    final text = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      color: viz.surface,
+      child: Row(
+        children: [
+          Icon(Icons.image_outlined, size: 18, color: viz.inkMuted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  rodando
+                      ? 'Buscando capas... $feitos de $total'
+                      : '$semCapa ${semCapa == 1 ? 'jogo está' : 'jogos estão'} '
+                          'sem capa',
+                  style: text.bodySmall?.copyWith(color: viz.inkPrimary),
+                ),
+                if (rodando && total > 0) ...[
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(
+                    value: feitos / total,
+                    minHeight: 3,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (rodando)
+            TextButton(onPressed: onParar, child: const Text('Parar'))
+          else ...[
+            TextButton(onPressed: onBuscar, child: const Text('Buscar')),
+            IconButton(
+              onPressed: onFechar,
+              icon: const Icon(Icons.close, size: 18),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Agora não',
+            ),
+          ],
+        ],
       ),
     );
   }

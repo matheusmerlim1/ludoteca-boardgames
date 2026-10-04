@@ -1,4 +1,5 @@
-﻿import '../models/game.dart';
+﻿import '../models/extra.dart';
+import '../models/game.dart';
 import '../utils/format.dart';
 
 /// Uma fatia de gráfico de pizza.
@@ -89,7 +90,19 @@ class CostStats {
     required this.mostPlayed,
     required this.byCostPerHour,
     required this.mostHours,
+    required this.extrasTotal,
+    required this.extrasCount,
   });
+
+  /// Compras avulsas (kit de sleeves, playmat...) — fora de [totalInvested],
+  /// que é o investimento **nos jogos** e alimenta custo por partida e por
+  /// hora. Um playmat não é de jogo nenhum; dividi-lo pelas partidas de um
+  /// jogo inventaria um número.
+  final double extrasTotal;
+  final int extrasCount;
+
+  /// Tudo que você gastou no hobby e ainda tem: jogos mais extras.
+  double get totalSpent => totalInvested + extrasTotal;
 
   /// Investimento atual: tudo que está na estante.
   final double totalInvested;
@@ -158,7 +171,26 @@ class CostStats {
 
   final List<RankedGame> mostHours;
 
-  bool get isEmpty => itemCount == 0;
+  bool get isEmpty => itemCount == 0 && extrasCount == 0;
+
+  /// O que saiu do bolso **neste** mês — a mesma conta da barra do mês atual
+  /// no gráfico de gasto. Não confundir com [monthlyOwnershipCost], o custo de
+  /// posse: ele dilui a coleção inteira no tempo e não muda de mês para mês.
+  /// Mês sem compra (ou coleção sem nenhuma data) dá zero, com o mês certo.
+  MonthSpend get currentMonthSpend {
+    final agora = DateTime.now();
+    final mes = DateTime(agora.year, agora.month);
+    for (final m in monthlySpend) {
+      if (m.month.year == mes.year && m.month.month == mes.month) return m;
+    }
+    return MonthSpend(
+      month: mes,
+      games: 0,
+      sleeves: 0,
+      accessories: 0,
+      itemCount: 0,
+    );
+  }
 
   /// Custo médio por partida da coleção como um todo.
   double? get avgCostPerPlay =>
@@ -191,6 +223,7 @@ class CostStats {
   /// e um ranking com metade dos jogos não responde "onde o meu está".
   static CostStats compute({
     required List<GameEntry> entries,
+    List<Extra> extras = const [],
     int topSlices = 5,
   }) {
     // Jogo desejado nunca entra em nada: não é seu e não foi jogado.
@@ -256,12 +289,24 @@ class CostStats {
     final compositionByMonthlyCost =
         _fatias(topo, (e) => e.costPerMonth ?? 0, topSlices);
 
+    // --- extras avulsos -----------------------------------------------------
+    final extrasSleeves = extras
+        .where((x) => x.isSleeve)
+        .fold<double>(0, (s, x) => s + x.price);
+    final extrasOutros = extras
+        .where((x) => !x.isSleeve)
+        .fold<double>(0, (s, x) => s + x.price);
+
     // --- pizza por tipo de gasto -------------------------------------------
+    // Os extras entram aqui: a pergunta é "em que você gastou", e um kit de
+    // sleeves avulso é gasto com sleeves do mesmo jeito.
+    final sleevesTudo = totalSleeves + extrasSleeves;
+    final acessoriosTudo = totalAccessories + extrasOutros;
     final compositionByType = <Slice>[
       if (totalGames > 0) Slice(label: 'Caixa do jogo', value: totalGames, slot: 0),
-      if (totalSleeves > 0) Slice(label: 'Sleeves', value: totalSleeves, slot: 1),
-      if (totalAccessories > 0)
-        Slice(label: 'Acessórios', value: totalAccessories, slot: 2),
+      if (sleevesTudo > 0) Slice(label: 'Sleeves', value: sleevesTudo, slot: 1),
+      if (acessoriosTudo > 0)
+        Slice(label: 'Acessórios', value: acessoriosTudo, slot: 2),
     ];
 
     // --- gasto por mês ------------------------------------------------------
@@ -272,6 +317,7 @@ class CostStats {
     // gastos.
     final monthlySpend = _gastoPorMes(
       entries.where((e) => e.game.isMine).toList(),
+      extras,
     );
 
     // --- rankings -----------------------------------------------------------
@@ -338,6 +384,8 @@ class CostStats {
       compositionByType: compositionByType,
       compositionByMonthlyCost: compositionByMonthlyCost,
       monthlySpend: monthlySpend,
+      extrasTotal: extrasSleeves + extrasOutros,
+      extrasCount: extras.length,
       cheapestPerPlay: baratos.map(porPartida).toList(),
       priciestPerPlay: caros.map(porPartida).toList(),
       byCostPerMonth: porMes
@@ -421,10 +469,14 @@ class CostStats {
   ///
   /// Sem esse preenchimento a linha do tempo mente: três compras em jan, mar e
   /// jun viram três barras lado a lado e parecem meses consecutivos.
-  static List<MonthSpend> _gastoPorMes(List<GameEntry> entries) {
+  static List<MonthSpend> _gastoPorMes(
+    List<GameEntry> entries, [
+    List<Extra> extras = const [],
+  ]) {
     final comData =
         entries.where((e) => e.game.purchaseDate != null).toList();
-    if (comData.isEmpty) return const [];
+    final extrasComData = extras.where((x) => x.purchaseDate != null).toList();
+    if (comData.isEmpty && extrasComData.isEmpty) return const [];
 
     final acc = <String, ({double j, double s, double a, int n})>{};
     DateTime? menor;
@@ -442,6 +494,24 @@ class CostStats {
         j: atual.j + e.game.price,
         s: atual.s + e.game.sleeveCost,
         a: atual.a + e.game.accessoryCost,
+        n: atual.n + 1,
+      );
+    }
+
+    // Extra avulso soma no mês em que foi comprado: sleeves com sleeves, o
+    // resto com acessórios — a barra do mês mostra a quebra do mesmo jeito.
+    for (final x in extrasComData) {
+      final d = x.purchaseDate!;
+      final mes = DateTime(d.year, d.month);
+      if (menor == null || mes.isBefore(menor)) menor = mes;
+      if (maior == null || mes.isAfter(maior)) maior = mes;
+
+      final k = chaveMes(mes);
+      final atual = acc[k] ?? (j: 0.0, s: 0.0, a: 0.0, n: 0);
+      acc[k] = (
+        j: atual.j,
+        s: atual.s + (x.isSleeve ? x.price : 0),
+        a: atual.a + (x.isSleeve ? 0 : x.price),
         n: atual.n + 1,
       );
     }
