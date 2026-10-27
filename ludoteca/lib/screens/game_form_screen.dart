@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
@@ -92,10 +92,13 @@ class _GameFormScreenState extends State<GameFormScreen> {
         TextEditingController(text: _num(g?.maxPlayers ?? b?.maxPlayers));
     _bestPlayers =
         TextEditingController(text: _num(g?.bestPlayers ?? b?.bestPlayers));
-    _minTime = TextEditingController(text: _num(g?.minPlaytime ?? b?.minPlaytime));
-    _maxTime = TextEditingController(text: _num(g?.maxPlaytime ?? b?.maxPlaytime));
+    _minTime =
+        TextEditingController(text: _num(g?.minPlaytime ?? b?.minPlaytime));
+    _maxTime =
+        TextEditingController(text: _num(g?.maxPlaytime ?? b?.maxPlaytime));
     _weight = TextEditingController(
-      text: (g?.weight ?? b?.weight)?.toStringAsFixed(2).replaceAll('.', ',') ?? '',
+      text: (g?.weight ?? b?.weight)?.toStringAsFixed(2).replaceAll('.', ',') ??
+          '',
     );
 
     // Ao cadastrar um jogo novo, o preço de referência da fonte entra como
@@ -116,7 +119,8 @@ class _GameFormScreenState extends State<GameFormScreen> {
     );
     _notes = TextEditingController(text: g?.notes ?? '');
 
-    _linkKind = g?.linkKind ?? ((b?.isExpansion ?? false) ? LinkKind.expansao : null);
+    _linkKind =
+        g?.linkKind ?? ((b?.isExpansion ?? false) ? LinkKind.expansao : null);
     _parentId = g?.parentId;
     _ownership = g?.ownership ?? widget.ownershipInicial ?? Ownership.propria;
 
@@ -129,7 +133,8 @@ class _GameFormScreenState extends State<GameFormScreen> {
     // Só para o que é seu: jogo de outra pessoa e jogo desejado não têm data de
     // compra, e inventar uma criaria custo de posse de dinheiro que não saiu.
     final novoEMeu = g == null && _ownership == Ownership.propria;
-    _purchaseDate = g?.purchaseDate ?? (novoEMeu ? soData(DateTime.now()) : null);
+    _purchaseDate =
+        g?.purchaseDate ?? (novoEMeu ? soData(DateTime.now()) : null);
 
     _manualLastPlayed = g?.manualLastPlayed;
 
@@ -342,38 +347,38 @@ class _GameFormScreenState extends State<GameFormScreen> {
             // que o app depois ignora de propósito, e o número ficaria no banco
             // parecendo dinheiro seu.
             if (_ownership != Ownership.jogada)
-            _Grupo(
-              titulo: 'Custos',
-              children: [
-                _CampoDinheiro(
-                  controller: _price,
-                  label: 'Preço pago pela caixa',
-                  // O texto de apoio diz de onde o número veio. Sem isso, um
-                  // campo já preenchido parece um fato — e preço de hoje não é
-                  // o que você pagou anos atrás.
-                  helper: _notaPreco == null
-                      ? null
-                      : 'Sugestão do Comparajogos ($_notaPreco). '
-                          'Troque pelo valor que você pagou.',
-                ),
-                _CampoDinheiro(
-                  controller: _sleeves,
-                  label: 'Sleeves',
-                  helper: 'Quanto você gastou protegendo as cartas.',
-                ),
-                _CampoDinheiro(
-                  controller: _accessories,
-                  label: 'Acessórios',
-                  helper: 'Insertos, organizadores, moedas de metal...',
-                ),
-                _CampoData(
-                  label: 'Data da compra',
-                  valor: _purchaseDate,
-                  helper: 'Sem ela não dá para calcular custo por mês.',
-                  onChange: (d) => setState(() => _purchaseDate = d),
-                ),
-              ],
-            ),
+              _Grupo(
+                titulo: 'Custos',
+                children: [
+                  _CampoDinheiro(
+                    controller: _price,
+                    label: 'Preço pago pela caixa',
+                    // O texto de apoio diz de onde o número veio. Sem isso, um
+                    // campo já preenchido parece um fato — e preço de hoje não é
+                    // o que você pagou anos atrás.
+                    helper: _notaPreco == null
+                        ? null
+                        : 'Sugestão do Comparajogos ($_notaPreco). '
+                            'Troque pelo valor que você pagou.',
+                  ),
+                  _CampoDinheiro(
+                    controller: _sleeves,
+                    label: 'Sleeves',
+                    helper: 'Quanto você gastou protegendo as cartas.',
+                  ),
+                  _CampoDinheiro(
+                    controller: _accessories,
+                    label: 'Acessórios',
+                    helper: 'Insertos, organizadores, moedas de metal...',
+                  ),
+                  _CampoData(
+                    label: 'Data da compra',
+                    valor: _purchaseDate,
+                    helper: 'Sem ela não dá para calcular custo por mês.',
+                    onChange: (d) => setState(() => _purchaseDate = d),
+                  ),
+                ],
+              ),
 
             _Grupo(
               titulo: 'Histórico anterior',
@@ -653,6 +658,7 @@ class _GameFormScreenState extends State<GameFormScreen> {
             (editando: false, tipo: Ownership.propria) =>
               '${jogo.displayName} entrou na coleção.',
           }),
+          duration: const Duration(seconds: 2),
         ),
       );
     } catch (e) {

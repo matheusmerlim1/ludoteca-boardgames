@@ -1,10 +1,11 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../models/game.dart';
 import '../models/play.dart';
+import '../models/play_score.dart';
 import '../services/share_service.dart';
 import '../theme.dart';
 import '../utils/format.dart';
@@ -33,6 +34,7 @@ class PlayBubbles extends StatefulWidget {
     super.key,
     required this.plays,
     required this.entryPorId,
+    this.carregarPlacares,
     this.modoImagem = false,
   });
 
@@ -40,6 +42,11 @@ class PlayBubbles extends StatefulWidget {
 
   /// Para achar nome e capa a partir do id da partida.
   final GameEntry? Function(int gameId) entryPorId;
+
+  /// Busca o placar das partidas do jogo tocado. Sem ele, o detalhe mostra
+  /// datas e jogadores, só não mostra pontos.
+  final Future<Map<int, List<PlayScore>>> Function(List<int> playIds)?
+      carregarPlacares;
 
   /// Deixa o quadro no estado em que ele é capturado, para o teste conferir o
   /// que sai na imagem sem precisar abrir a folha de compartilhamento.
@@ -150,107 +157,139 @@ class _PlayBubblesState extends State<PlayBubbles> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-          _NavegadorDeMes(
-            mes: _mes,
-            partidas: contagem.values.fold(0, (a, b) => a + b),
-            jogos: contagem.length,
-            soMesEAno: _capturando,
-            onAnterior: temAnterior
-                ? () => setState(() {
-                      _mes = meses[i - 1];
-                      _selecionada = null;
-                    })
-                : null,
-            onProximo: temProximo
-                ? () => setState(() {
-                      _mes = meses[i + 1];
-                      _selecionada = null;
-                    })
-                : null,
-          ),
-          const SizedBox(height: 14),
-          if (contagem.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 28),
-              child: Text(
-                'Nenhuma partida neste mês.',
-                textAlign: TextAlign.center,
-                style: text.bodySmall,
+              _NavegadorDeMes(
+                mes: _mes,
+                partidas: contagem.values.fold(0, (a, b) => a + b),
+                jogos: contagem.length,
+                soMesEAno: _capturando,
+                onAnterior: temAnterior
+                    ? () => setState(() {
+                          _mes = meses[i - 1];
+                          _selecionada = null;
+                        })
+                    : null,
+                onProximo: temProximo
+                    ? () => setState(() {
+                          _mes = meses[i + 1];
+                          _selecionada = null;
+                        })
+                    : null,
               ),
-            )
-          else
-            LayoutBuilder(
-              builder: (context, c) {
-                // Teto de altura para o conjunto caber na tela sem rolar,
-                // como na imagem que o Ludohall gera. Se não couber, os
-                // círculos encolhem juntos — a proporção entre eles é o que
-                // importa, não o tamanho absoluto.
-                final bolhas = _monta(contagem, c.maxWidth, 460);
-                final altura = _alturaNecessaria(bolhas);
+              const SizedBox(height: 14),
+              if (contagem.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 28),
+                  child: Text(
+                    'Nenhuma partida neste mês.',
+                    textAlign: TextAlign.center,
+                    style: text.bodySmall,
+                  ),
+                )
+              else
+                LayoutBuilder(
+                  builder: (context, c) {
+                    // Teto de altura para o conjunto caber na tela sem rolar,
+                    // como na imagem que o Ludohall gera. Se não couber, os
+                    // círculos encolhem juntos — a proporção entre eles é o que
+                    // importa, não o tamanho absoluto.
+                    final bolhas = _monta(contagem, c.maxWidth, 460);
+                    final altura = _alturaNecessaria(bolhas);
 
-                return SizedBox(
-                  height: altura,
-                  child: Stack(
-                    children: [
-                      for (final b in bolhas)
-                        Positioned(
-                          left: b.centro.dx - b.raio,
-                          top: b.centro.dy - b.raio,
-                          width: b.raio * 2,
-                          height: b.raio * 2,
-                          child: _Circulo(
-                            bolha: b,
-                            selecionada:
-                                !_capturando && _selecionada == b.entry.id,
-                            onTap: () => setState(
-                              () => _selecionada =
-                                  _selecionada == b.entry.id ? null : b.entry.id,
+                    return SizedBox(
+                      height: altura,
+                      child: Stack(
+                        children: [
+                          for (final b in bolhas)
+                            Positioned(
+                              left: b.centro.dx - b.raio,
+                              top: b.centro.dy - b.raio,
+                              width: b.raio * 2,
+                              height: b.raio * 2,
+                              child: _Circulo(
+                                bolha: b,
+                                selecionada:
+                                    !_capturando && _selecionada == b.entry.id,
+                                onTap: () => setState(
+                                  () => _selecionada =
+                                      _selecionada == b.entry.id
+                                          ? null
+                                          : b.entry.id,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              // Tocar numa capa abre, logo abaixo dos círculos, o que aconteceu com
+              // aquele jogo no mês: quando foi jogado, com quem, quanto durou e o
+              // placar. Fica fora da imagem — é consulta, não o desenho do mês.
+              if (!_capturando && _selecionada != null)
+                _DetalheDoJogo(
+                  key: ValueKey('${chaveMes(_mes)}-$_selecionada'),
+                  entry: widget.entryPorId(_selecionada!),
+                  partidas: [
+                    for (final p in widget.plays)
+                      if (p.gameId == _selecionada &&
+                          p.playedAt.year == _mes.year &&
+                          p.playedAt.month == _mes.month)
+                        p,
+                  ]..sort((a, b) => a.playedAt.compareTo(b.playedAt)),
+                  carregarPlacares: widget.carregarPlacares,
+                  onFechar: () => setState(() => _selecionada = null),
+                ),
+              const SizedBox(height: 10),
+              // A legenda é a lista: na tela, capa e círculo não dizem o nome, e
+              // depender de tocar em cada bolha para saber o que é seria esconder
+              // o dado.
+              //
+              // Na imagem ela sai fora: o que se manda é o desenho do mês, e uma
+              // lista de nomes com contagem embaixo transforma a imagem no mesmo
+              // texto que ela veio substituir.
+              if (!_capturando)
+                for (final e in _ordenado(contagem))
+                  // A linha da legenda abre o mesmo detalhe que a capa: bolha
+                  // pequena é difícil de acertar com o dedo.
+                  InkWell(
+                    onTap: () => setState(
+                      () => _selecionada = _selecionada == e.key ? null : e.key,
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: viz.serie(0),
+                              shape: BoxShape.circle,
                             ),
                           ),
-                        ),
-                    ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              widget.entryPorId(e.key)?.displayName ??
+                                  'Removido',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: text.bodySmall?.copyWith(
+                                color: viz.inkPrimary,
+                                fontWeight: _selecionada == e.key
+                                    ? FontWeight.w600
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            contagemPartidas(e.value),
+                            style: text.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                );
-              },
-            ),
-          const SizedBox(height: 10),
-          // A legenda é a lista: na tela, capa e círculo não dizem o nome, e
-          // depender de tocar em cada bolha para saber o que é seria esconder
-          // o dado.
-          //
-          // Na imagem ela sai fora: o que se manda é o desenho do mês, e uma
-          // lista de nomes com contagem embaixo transforma a imagem no mesmo
-          // texto que ela veio substituir.
-          if (!_capturando)
-            for (final e in _ordenado(contagem))
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: viz.serie(0),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.entryPorId(e.key)?.displayName ?? 'Removido',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.bodySmall?.copyWith(color: viz.inkPrimary),
-                      ),
-                    ),
-                    Text(
-                      contagemPartidas(e.value),
-                      style: text.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
         ),
@@ -411,8 +450,9 @@ class _PlayBubblesState extends State<PlayBubbles> {
           // Não pode vazar pelas laterais.
           if (p.dx - b.raio < 0 || p.dx + b.raio > largura) continue;
 
-          final colide = bolhas.take(i).any((o) =>
-              (p - o.centro).distance < b.raio + o.raio + folga);
+          final colide = bolhas
+              .take(i)
+              .any((o) => (p - o.centro).distance < b.raio + o.raio + folga);
           if (colide) continue;
 
           b.centro = p;
@@ -427,10 +467,8 @@ class _PlayBubblesState extends State<PlayBubbles> {
       // capas sobrepostas: o anterior podia estar bem acima de outro maior,
       // e o novo caía em cima dele.
       if (!achou) {
-        final maisBaixo = bolhas
-            .take(i)
-            .map((o) => o.centro.dy + o.raio)
-            .reduce(math.max);
+        final maisBaixo =
+            bolhas.take(i).map((o) => o.centro.dy + o.raio).reduce(math.max);
         b.centro = Offset(largura / 2, maisBaixo + b.raio + folga);
       }
     }
@@ -492,6 +530,229 @@ class _Circulo extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// O jogo tocado, no mês mostrado: um resumo e as partidas uma a uma.
+class _DetalheDoJogo extends StatefulWidget {
+  const _DetalheDoJogo({
+    super.key,
+    required this.entry,
+    required this.partidas,
+    required this.carregarPlacares,
+    required this.onFechar,
+  });
+
+  final GameEntry? entry;
+
+  /// Já filtradas pelo jogo e pelo mês, da mais antiga para a mais nova.
+  final List<Play> partidas;
+
+  final Future<Map<int, List<PlayScore>>> Function(List<int> playIds)?
+      carregarPlacares;
+
+  final VoidCallback onFechar;
+
+  @override
+  State<_DetalheDoJogo> createState() => _DetalheDoJogoState();
+}
+
+class _DetalheDoJogoState extends State<_DetalheDoJogo> {
+  /// Criado uma vez: buscar no banco a cada rebuild faria o placar piscar.
+  late final Future<Map<int, List<PlayScore>>> _placares = () {
+    final ids = [
+      for (final p in widget.partidas)
+        if (p.id != null) p.id!
+    ];
+    final carregar = widget.carregarPlacares;
+    if (carregar == null || ids.isEmpty) {
+      return Future.value(const <int, List<PlayScore>>{});
+    }
+    return carregar(ids);
+  }();
+
+  @override
+  Widget build(BuildContext context) {
+    final viz = context.viz;
+    final text = Theme.of(context).textTheme;
+    final partidas = widget.partidas;
+
+    final medidas = partidas.where((p) => p.hasMeasuredDuration).toList();
+    final minutos = medidas.fold<int>(0, (s, p) => s + p.durationMinutes!);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 12),
+      decoration: BoxDecoration(
+        color: viz.serie(0).withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: FutureBuilder<Map<int, List<PlayScore>>>(
+        future: _placares,
+        builder: (context, snap) {
+          final placares = snap.data ?? const <int, List<PlayScore>>{};
+          final todos = [for (final l in placares.values) ...l];
+
+          final resumo = <String>[
+            contagemPartidas(partidas.length),
+            // Soma só o que foi cronometrado, e diz isso: somar a duração
+            // média no lugar faria um número inventado parecer medido.
+            if (medidas.isNotEmpty)
+              '${duracao(minutos)} '
+                  '${medidas.length == partidas.length ? 'jogadas' : 'cronometradas'}',
+            if (todos.maiorPontuacao != null)
+              'maior placar ${pontos(todos.maiorPontuacao!)}',
+            if (_quemMaisGanhou(partidas, placares) case final v?) v,
+          ];
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.entry?.displayName ?? 'Jogo removido',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.titleSmall?.copyWith(color: viz.inkPrimary),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: widget.onFechar,
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Fechar',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Text(
+                  resumo.join(' · '),
+                  style: text.labelSmall?.copyWith(color: viz.inkMuted),
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final p in partidas)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 6, 8, 0),
+                  child: _PartidaDoMes(
+                    play: p,
+                    placar: placares[p.id] ?? const [],
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// "Ana ganhou 3" quando alguém venceu mais de uma vez no mês.
+  ///
+  /// Com uma vitória só, a linha da própria partida já conta; repetir no
+  /// resumo seria a mesma informação duas vezes.
+  static String? _quemMaisGanhou(
+    List<Play> partidas,
+    Map<int, List<PlayScore>> placares,
+  ) {
+    final vitorias = <String, int>{};
+    for (final p in partidas) {
+      final placar = placares[p.id] ?? const [];
+      final nomes = placar.isNotEmpty
+          ? placar.vencedores.map((s) => s.playerName)
+          : [if (p.winner != null && p.winner!.trim().isNotEmpty) p.winner!];
+      for (final n in nomes) {
+        vitorias[n] = (vitorias[n] ?? 0) + 1;
+      }
+    }
+    if (vitorias.isEmpty) return null;
+    final melhor = vitorias.entries.reduce((a, b) => b.value > a.value ? b : a);
+    if (melhor.value < 2) return null;
+    return '${melhor.key} ganhou ${melhor.value}';
+  }
+}
+
+/// Uma partida do mês: a data em destaque, os detalhes e o placar embaixo.
+class _PartidaDoMes extends StatelessWidget {
+  const _PartidaDoMes({required this.play, required this.placar});
+
+  final Play play;
+  final List<PlayScore> placar;
+
+  @override
+  Widget build(BuildContext context) {
+    final viz = context.viz;
+    final text = Theme.of(context).textTheme;
+    final p = play;
+    final temPlacar = placar.isNotEmpty;
+
+    final detalhes = <String>[
+      if (temPlacar)
+        '${placar.length} jogadores'
+      else if (p.players != null)
+        '${p.players} jogadores',
+      if (p.hasMeasuredDuration) duracao(p.durationMinutes!),
+      if (!temPlacar && p.winner != null && p.winner!.isNotEmpty)
+        'ganhou: ${p.winner}',
+      if (p.notes != null && p.notes!.isNotEmpty) p.notes!,
+    ];
+
+    // Quem ganhou primeiro, depois do maior para o menor placar.
+    final ordenado = [...placar]..sort((a, b) {
+        if (a.won != b.won) return a.won ? -1 : 1;
+        if (a.score == null && b.score == null) return 0;
+        if (a.score == null) return 1;
+        if (b.score == null) return -1;
+        return b.score!.compareTo(a.score!);
+      });
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          detalhes.isEmpty
+              ? data(p.playedAt)
+              : '${data(p.playedAt)} · ${detalhes.join(' · ')}',
+          style: text.bodySmall?.copyWith(color: viz.inkPrimary),
+        ),
+        for (final s in ordenado)
+          Padding(
+            padding: const EdgeInsets.only(left: 10, top: 2),
+            child: Row(
+              children: [
+                Icon(
+                  s.won ? Icons.emoji_events : Icons.circle,
+                  size: s.won ? 13 : 5,
+                  color: s.won ? viz.serie(3) : viz.inkMuted,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    s.playerName,
+                    overflow: TextOverflow.ellipsis,
+                    style: s.won
+                        ? text.bodySmall?.copyWith(
+                            color: viz.inkPrimary,
+                            fontWeight: FontWeight.w600,
+                          )
+                        : text.bodySmall,
+                  ),
+                ),
+                if (s.score != null)
+                  Text(
+                    pontos(s.score!),
+                    style: text.bodySmall?.copyWith(
+                      color: viz.inkPrimary,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/game_repository.dart';
@@ -155,6 +155,7 @@ class _CostsScreenState extends State<CostsScreen> {
           PlayBubbles(
             plays: store.todasPartidas,
             entryPorId: store.entryById,
+            carregarPlacares: store.scoresForPlays,
           ),
         ];
 
@@ -171,150 +172,147 @@ class _CostsScreenState extends State<CostsScreen> {
 
   List<Widget> _abaDinheiro(CostStats stats, CollectionStore store) {
     return [
-            // Pizza 1 — onde o dinheiro está. Máximo 6 fatias: a cauda já vem
-            // dobrada em "Outros" do cálculo.
-            DonutChart(
-              title: 'Onde está o seu dinheiro',
-              subtitle: 'Investimento por jogo, do maior para o menor. '
-                  'Expansões somam no jogo-base.',
-              slices: stats.compositionByGame,
-            ),
-            const SizedBox(height: 16),
+      // Pizza 1 — onde o dinheiro está. Máximo 6 fatias: a cauda já vem
+      // dobrada em "Outros" do cálculo.
+      DonutChart(
+        title: 'Onde está o seu dinheiro',
+        subtitle: 'Investimento por jogo, do maior para o menor. '
+            'Expansões somam no jogo-base.',
+        slices: stats.compositionByGame,
+      ),
+      const SizedBox(height: 16),
 
-            // Pizza 2 — o custo mensal fatiado por jogo. As fatias somam
-            // exatamente o "custo por mês" do cartão lá em cima.
-            DonutChart(
-              title: 'Quem puxa o custo por mês',
-              subtitle: 'Cada jogo como fatia dos '
-                  '${dinheiro(stats.monthlyOwnershipCost, casas: 0)} que a '
-                  'coleção custa por mês de posse.',
-              slices: stats.compositionByMonthlyCost,
-            ),
-            const SizedBox(height: 16),
+      // Pizza 2 — o custo mensal fatiado por jogo. As fatias somam
+      // exatamente o "custo por mês" do cartão lá em cima.
+      DonutChart(
+        title: 'Quem puxa o custo por mês',
+        subtitle: 'Cada jogo como fatia dos '
+            '${dinheiro(stats.monthlyOwnershipCost, casas: 0)} que a '
+            'coleção custa por mês de posse.',
+        slices: stats.compositionByMonthlyCost,
+      ),
+      const SizedBox(height: 16),
 
-            // Pizza 3 — três fatias. Se sobrar menos de três (sem sleeves nem
-            // acessórios), o próprio widget troca a rosca por números soltos.
-            DonutChart(
-              title: 'Em que você gastou',
-              subtitle: 'Caixa do jogo, sleeves e acessórios.',
-              slices: stats.compositionByType,
-            ),
-            const SizedBox(height: 16),
+      // Pizza 3 — três fatias. Se sobrar menos de três (sem sleeves nem
+      // acessórios), o próprio widget troca a rosca por números soltos.
+      DonutChart(
+        title: 'Em que você gastou',
+        subtitle: 'Caixa do jogo, sleeves e acessórios.',
+        slices: stats.compositionByType,
+      ),
+      const SizedBox(height: 16),
 
-            MonthBarChart(
-              title: 'Quanto você gastou por mês',
-              subtitle: 'Pela data de compra. Inclui jogos já vendidos — '
-                  'o dinheiro saiu do bolso na época. Toque duas vezes numa '
-                  'barra para ver o que foi comprado.',
-              data: stats.monthlySpend,
-              onAbrirMes: (mes) => MonthSpendSheet.show(
-                context,
-                entries: store.allEntries,
-                mesInicial: mes,
-                onAbrirJogo: _abrir,
-                extras: store.extras,
-                onAbrirExtra: _editarExtra,
-              ),
-            ),
-            const SizedBox(height: 16),
-            _ExtrasCard(
-              extras: store.extras,
-              onAdicionar: () => _editarExtra(null),
-              onEditar: _editarExtra,
-            ),
+      MonthBarChart(
+        title: 'Quanto você gastou por mês',
+        subtitle: 'Pela data de compra. Inclui jogos já vendidos — '
+            'o dinheiro saiu do bolso na época. Toque duas vezes numa '
+            'barra para ver o que foi comprado.',
+        data: stats.monthlySpend,
+        onAbrirMes: (mes) => MonthSpendSheet.show(
+          context,
+          entries: store.allEntries,
+          mesInicial: mes,
+          onAbrirJogo: _abrir,
+          extras: store.extras,
+          onAbrirExtra: _editarExtra,
+        ),
+      ),
+      const SizedBox(height: 16),
+      _ExtrasCard(
+        extras: store.extras,
+        onAdicionar: () => _editarExtra(null),
+        onEditar: _editarExtra,
+      ),
     ];
   }
 
   List<Widget> _abaValeAPena(CostStats stats, CollectionStore store) {
     return [
-            RankedBarList(
-              title: _piores
-                  ? 'Os que ainda não se pagaram'
-                  : 'Os que mais valeram o dinheiro',
-              subtitle: 'Custo por partida: tudo que o jogo custou dividido '
-                  'pelas partidas jogadas.',
-              items:
-                  _piores ? stats.priciestPerPlay : stats.cheapestPerPlay,
-              format: (v) => dinheiro(v),
-              emptyMessage: 'Registre partidas para este ranking existir.',
-              onTapGame: _abrir,
-              meta: store.metaPorPartida,
-              metaLabel: store.metaPorPartida == null
-                  ? null
-                  : 'Vale a pena até ${dinheiro(store.metaPorPartida!)} por partida',
-              onAjustarMeta: () => _ajustarMeta(
-                        chave: GameRepository.keyMetaPorPartida,
-                        atual: store.metaPorPartida,
-                        titulo: 'Quanto por partida vale a pena?',
-                        descricao: 'Acima disso o jogo aparece marcado como '
-                            'ainda não pago. Quem joga toda semana e quem joga '
-                            'uma vez por mês não usam o mesmo número.',
-                        sufixo: 'por partida',
-                        sugestoes: const [5, 10, 20, 30],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: true, label: Text('Piores')),
-                  ButtonSegment(value: false, label: Text('Melhores')),
-                ],
-                selected: {_piores},
-                onSelectionChanged: (s) => setState(() => _piores = s.first),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            RankedBarList(
-              title: 'Custo de posse por mês',
-              subtitle: 'Total investido dividido pelos meses desde a compra. '
-                  'Jogo antigo custa pouco por mês; recém-comprado custa caro.',
-              items: stats.byCostPerMonth,
-              format: (v) => '${dinheiro(v)}/mês',
-              emptyMessage: 'Preencha a data de compra dos jogos.',
-              onTapGame: _abrir,
-              meta: store.metaPorMes,
-              metaLabel: store.metaPorMes == null
-                  ? null
-                  : 'Meu teto: ${dinheiro(store.metaPorMes!)} por mês',
-              onAjustarMeta: () => _ajustarMeta(
-                        chave: GameRepository.keyMetaPorMes,
-                        atual: store.metaPorMes,
-                        titulo: 'Quanto um jogo pode custar por mês?',
-                        descricao: 'Custo de posse: o investimento diluído no '
-                            'tempo em que o jogo está com você.',
-                        sufixo: '/mês',
-                        sugestoes: const [10, 20, 50, 100],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            RankedBarList(
-              title: 'Custo por hora de jogo',
-              subtitle: 'Investimento dividido pelas horas de mesa. Compara '
-                  'melhor que o custo por partida quando as durações são bem '
-                  'diferentes — um filler de 20 min e uma campanha de 4 h não '
-                  'valem uma "partida" cada.',
-              items: stats.byCostPerHour,
-              format: (v) => '${dinheiro(v)}/h',
-              emptyMessage: 'Precisa de partidas registradas e de duração '
-                  'cadastrada no jogo.',
-              onTapGame: _abrir,
-              meta: store.metaPorHora,
-              metaLabel: store.metaPorHora == null
-                  ? null
-                  : 'Vale a pena até ${dinheiro(store.metaPorHora!)} por hora',
-              onAjustarMeta: () => _ajustarMeta(
-                        chave: GameRepository.keyMetaPorHora,
-                        atual: store.metaPorHora,
-                        titulo: 'Quanto por hora de mesa vale a pena?',
-                        descricao: 'Um bom parâmetro é o que você pagaria por '
-                            'uma hora de qualquer outro lazer.',
-                        sufixo: '/h',
-                        sugestoes: const [5, 10, 15, 25],
-              ),
-            ),
+      RankedBarList(
+        title: _piores
+            ? 'Os que ainda não se pagaram'
+            : 'Os que mais valeram o dinheiro',
+        subtitle: 'Custo por partida: tudo que o jogo custou dividido '
+            'pelas partidas jogadas.',
+        items: _piores ? stats.priciestPerPlay : stats.cheapestPerPlay,
+        format: (v) => dinheiro(v),
+        emptyMessage: 'Registre partidas para este ranking existir.',
+        onTapGame: _abrir,
+        meta: store.metaPorPartida,
+        metaLabel: store.metaPorPartida == null
+            ? null
+            : 'Vale a pena até ${dinheiro(store.metaPorPartida!)} por partida',
+        onAjustarMeta: () => _ajustarMeta(
+          chave: GameRepository.keyMetaPorPartida,
+          atual: store.metaPorPartida,
+          titulo: 'Quanto por partida vale a pena?',
+          descricao: 'Acima disso o jogo aparece marcado como '
+              'ainda não pago. Quem joga toda semana e quem joga '
+              'uma vez por mês não usam o mesmo número.',
+          sufixo: 'por partida',
+          sugestoes: const [5, 10, 20, 30],
+        ),
+      ),
+      const SizedBox(height: 8),
+      Center(
+        child: SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(value: true, label: Text('Piores')),
+            ButtonSegment(value: false, label: Text('Melhores')),
+          ],
+          selected: {_piores},
+          onSelectionChanged: (s) => setState(() => _piores = s.first),
+        ),
+      ),
+      const SizedBox(height: 16),
+      RankedBarList(
+        title: 'Custo de posse por mês',
+        subtitle: 'Total investido dividido pelos meses desde a compra. '
+            'Jogo antigo custa pouco por mês; recém-comprado custa caro.',
+        items: stats.byCostPerMonth,
+        format: (v) => '${dinheiro(v)}/mês',
+        emptyMessage: 'Preencha a data de compra dos jogos.',
+        onTapGame: _abrir,
+        meta: store.metaPorMes,
+        metaLabel: store.metaPorMes == null
+            ? null
+            : 'Meu teto: ${dinheiro(store.metaPorMes!)} por mês',
+        onAjustarMeta: () => _ajustarMeta(
+          chave: GameRepository.keyMetaPorMes,
+          atual: store.metaPorMes,
+          titulo: 'Quanto um jogo pode custar por mês?',
+          descricao: 'Custo de posse: o investimento diluído no '
+              'tempo em que o jogo está com você.',
+          sufixo: '/mês',
+          sugestoes: const [10, 20, 50, 100],
+        ),
+      ),
+      const SizedBox(height: 16),
+      RankedBarList(
+        title: 'Custo por hora de jogo',
+        subtitle: 'Investimento dividido pelas horas de mesa. Compara '
+            'melhor que o custo por partida quando as durações são bem '
+            'diferentes — um filler de 20 min e uma campanha de 4 h não '
+            'valem uma "partida" cada.',
+        items: stats.byCostPerHour,
+        format: (v) => '${dinheiro(v)}/h',
+        emptyMessage: 'Precisa de partidas registradas e de duração '
+            'cadastrada no jogo.',
+        onTapGame: _abrir,
+        meta: store.metaPorHora,
+        metaLabel: store.metaPorHora == null
+            ? null
+            : 'Vale a pena até ${dinheiro(store.metaPorHora!)} por hora',
+        onAjustarMeta: () => _ajustarMeta(
+          chave: GameRepository.keyMetaPorHora,
+          atual: store.metaPorHora,
+          titulo: 'Quanto por hora de mesa vale a pena?',
+          descricao: 'Um bom parâmetro é o que você pagaria por '
+              'uma hora de qualquer outro lazer.',
+          sufixo: '/h',
+          sugestoes: const [5, 10, 15, 25],
+        ),
+      ),
     ];
   }
 
@@ -343,38 +341,37 @@ class _CostsScreenState extends State<CostsScreen> {
 
   List<Widget> _abaTempo(CostStats stats) {
     return [
-            RankedBarList(
-              title: 'Mais horas de mesa',
-              subtitle: stats.hoursAreEstimated
-                  ? 'Partidas cronometradas contam o tempo real; o resto conta '
-                      'pela duração média do jogo. Por isso o "≈".'
-                  : 'Tempo cronometrado em todas as partidas.',
-              items: stats.mostHours,
-              format: (v) => talvez(
-                horas(v),
-                estimado: stats.hoursAreEstimated,
-              ),
-              emptyMessage: 'Nenhuma hora contabilizada ainda.',
-              onTapGame: _abrir,
-              // Violeta: azul é dinheiro, água é contagem, violeta é tempo.
-              // Amarelo e magenta ficariam abaixo de 3:1 numa barra de 6px
-              // sobre a superfície clara.
-              colorSlot: 6,
-            ),
-            const SizedBox(height: 16),
-
-            RankedBarList(
-              title: 'Os mais jogados',
-              subtitle: 'Partidas registradas, mais o histórico que veio da '
-                  'planilha.',
-              items: stats.mostPlayed,
-              format: (v) => '${v.toInt()}',
-              emptyMessage: 'Nenhuma partida registrada ainda.',
-              onTapGame: _abrir,
-              // Slot 3 (água) em vez do azul: esta é outra grandeza,
-              // contagem e não dinheiro, e a cor sinaliza isso.
-              colorSlot: 2,
-            ),
+      RankedBarList(
+        title: 'Mais horas de mesa',
+        subtitle: stats.hoursAreEstimated
+            ? 'Partidas cronometradas contam o tempo real; o resto conta '
+                'pela duração média do jogo. Por isso o "≈".'
+            : 'Tempo cronometrado em todas as partidas.',
+        items: stats.mostHours,
+        format: (v) => talvez(
+          horas(v),
+          estimado: stats.hoursAreEstimated,
+        ),
+        emptyMessage: 'Nenhuma hora contabilizada ainda.',
+        onTapGame: _abrir,
+        // Violeta: azul é dinheiro, água é contagem, violeta é tempo.
+        // Amarelo e magenta ficariam abaixo de 3:1 numa barra de 6px
+        // sobre a superfície clara.
+        colorSlot: 6,
+      ),
+      const SizedBox(height: 16),
+      RankedBarList(
+        title: 'Os mais jogados',
+        subtitle: 'Partidas registradas, mais o histórico que veio da '
+            'planilha.',
+        items: stats.mostPlayed,
+        format: (v) => '${v.toInt()}',
+        emptyMessage: 'Nenhuma partida registrada ainda.',
+        onTapGame: _abrir,
+        // Slot 3 (água) em vez do azul: esta é outra grandeza,
+        // contagem e não dinheiro, e a cor sinaliza isso.
+        colorSlot: 2,
+      ),
     ];
   }
 
@@ -494,8 +491,9 @@ class _Numeros extends StatelessWidget {
           label: 'CUSTO NO MÊS',
           value: dinheiro(stats.currentMonthSpend.total, casas: 0),
           hint: switch (stats.currentMonthSpend.itemCount) {
-            0 => 'nada comprado em ${mesAnoLongo(stats.currentMonthSpend.month)}'
-                ' · toque para ver os meses',
+            0 =>
+              'nada comprado em ${mesAnoLongo(stats.currentMonthSpend.month)}'
+                  ' · toque para ver os meses',
             final n => '$n ${n == 1 ? 'item' : 'itens'} em '
                 '${mesAnoLongo(stats.currentMonthSpend.month)} · toque para ver',
           },
@@ -637,7 +635,9 @@ class _ExtrasCard extends StatelessWidget {
                             style: text.bodyMedium?.copyWith(
                               color: viz.inkPrimary,
                               fontWeight: FontWeight.w600,
-                              fontFeatures: const [FontFeature.tabularFigures()],
+                              fontFeatures: const [
+                                FontFeature.tabularFigures()
+                              ],
                             ),
                           ),
                         ],
