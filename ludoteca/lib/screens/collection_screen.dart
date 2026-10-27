@@ -405,7 +405,10 @@ class _CollectionScreenState extends State<CollectionScreen> {
           'Partida de ${alvo.displayName} '
           'em ${data(r.play.playedAt)} registrada.',
         ),
-        duration: const Duration(seconds: 6),
+        duration: const Duration(seconds: 2),
+        // Com "Desfazer", o Flutter deixa o aviso parado até alguém tocar
+        // nele; aqui ele tem de sair sozinho.
+        persist: false,
         action: SnackBarAction(
           label: 'Desfazer',
           onPressed: () => store.deletePlay(playId),
