@@ -58,7 +58,24 @@ Vale ser explícito, porque é uma decisão de projeto e não um detalhe:
   sair do aparelho (Drive, e-mail, WhatsApp), e credencial não viaja nisso. Pelo
   mesmo motivo, restaurar um backup não apaga o token que já está lá.
 - **Nada é enviado sem ação sua.** As únicas chamadas de rede são busca no
-  catálogo, sincronização de lista e download de capa.
+  catálogo, sincronização de lista, download de capa e a consulta de versão
+  nova (abaixo), que só lê a página pública de releases.
+
+### Atualização pela página de releases
+
+Como o app não está em loja, ele mesmo se atualiza: toda vez que abre, consulta
+o último release de [github.com/matheusmerlim1/ludoteca-boardgames/releases](https://github.com/matheusmerlim1/ludoteca-boardgames/releases).
+Se a versão de lá for maior que a instalada e tiver um APK anexado, aparece o
+aviso com o que mudou e o botão **Baixar e instalar** — o APK baixa dentro do
+app e o instalador do Android abre em seguida (na primeira vez ele pede para
+liberar "instalar apps desconhecidos" para a Ludoteca). Sem rede, fica calado.
+Em **Ajustes → Sobre** há o botão **Procurar atualização** para consultar na hora.
+
+Para publicar uma versão: subir o `version:` do `pubspec.yaml`, commitar e rodar
+`ferramentas/publicar-versao.ps1 -Notas "o que mudou"`, que compila o APK e cria
+o release `vX.Y.Z` com ele anexado. O APK precisa sair sempre com a mesma chave
+de assinatura (hoje, a de debug desta máquina), senão o Android recusa instalar
+por cima.
 
 ---
 

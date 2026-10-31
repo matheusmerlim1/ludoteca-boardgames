@@ -7,6 +7,8 @@ import '../services/bgg_service.dart';
 import '../services/comparajogos_service.dart';
 import '../services/share_service.dart';
 import '../services/tag_backfill_service.dart';
+import '../services/update_service.dart';
+import '../widgets/update_dialog.dart';
 import '../services/game_catalog.dart';
 import '../state/collection_store.dart';
 import '../theme.dart';
@@ -116,10 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   Text('Sobre', style: text.titleMedium),
                   const SizedBox(height: 8),
-                  Text(
-                    'Ludoteca 1.0.0',
-                    style: text.bodySmall?.copyWith(color: viz.inkPrimary),
-                  ),
+                  _Versao(estilo: text.bodySmall?.copyWith(color: viz.inkPrimary)),
                   const SizedBox(height: 10),
                   Text(
                     'Nomes, capas, número de jogadores, duração e peso vêm da '
@@ -854,6 +853,78 @@ class _CartaoTokenState extends State<_CartaoToken> {
       _resultadoOk = false;
       _resultado = 'Token removido.';
     });
+  }
+}
+
+/// Versão instalada e o botão que consulta a página de releases na hora.
+class _Versao extends StatefulWidget {
+  const _Versao({this.estilo});
+
+  final TextStyle? estilo;
+
+  @override
+  State<_Versao> createState() => _VersaoState();
+}
+
+class _VersaoState extends State<_Versao> {
+  final _service = UpdateService();
+  String? _versao;
+  bool _procurando = false;
+  String? _resultado;
+
+  @override
+  void initState() {
+    super.initState();
+    _service.installedVersion().then((v) {
+      if (mounted) setState(() => _versao = v);
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Ludoteca ${_versao ?? ''}'.trim(), style: widget.estilo),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _procurando ? null : _procurar,
+          icon: _procurando
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.system_update_outlined),
+          label: const Text('Procurar atualização'),
+        ),
+        if (_resultado != null) ...[
+          const SizedBox(height: 6),
+          Text(_resultado!, style: text.bodySmall),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _procurar() async {
+    setState(() {
+      _procurando = true;
+      _resultado = null;
+    });
+    try {
+      final nova = await _service.checkForUpdate();
+      if (!mounted) return;
+      if (nova == null) {
+        setState(() => _resultado = 'Você já está na versão mais nova.');
+      } else {
+        await showUpdateDialog(context, nova, service: _service);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _resultado = '$e');
+    } finally {
+      if (mounted) setState(() => _procurando = false);
+    }
   }
 }
 

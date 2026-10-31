@@ -1,5 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 
+import '../services/update_service.dart';
+import '../widgets/update_dialog.dart';
 import 'collection_screen.dart';
 import 'costs_screen.dart';
 import 'settings_screen.dart';
@@ -15,6 +17,24 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _procurarAtualizacao());
+  }
+
+  /// A cada abertura, consulta a página de releases. Sem rede ou sem versão
+  /// nova, fica calado — o botão em Ajustes mostra o motivo se pedirem.
+  Future<void> _procurarAtualizacao() async {
+    final service = UpdateService();
+    try {
+      final nova = await service.checkForUpdate();
+      if (nova != null && mounted) {
+        await showUpdateDialog(context, nova, service: service);
+      }
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {

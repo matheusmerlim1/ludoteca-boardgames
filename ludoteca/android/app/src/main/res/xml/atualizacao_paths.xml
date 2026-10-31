@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pasta que o FileProvider expõe ao instalador: só o cache do app, onde o
+     UpdateService grava o APK baixado. -->
+<paths>
+    <cache-path name="atualizacao" path="." />
+</paths>
