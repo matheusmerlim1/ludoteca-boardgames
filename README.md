@@ -27,6 +27,10 @@ partida?".
 **Partidas.** Registrar leva dois toques a partir da tela inicial. Dá para anotar
 o placar — quem jogou, quantos pontos fez, quem venceu — e dá para registrar
 partida de um jogo que **não é seu**, para as horas contarem.
+Para saber quanto durou de verdade, **Iniciar cronômetro** na ficha do jogo: uma
+faixa com o tempo correndo fica acima da navegação (continua certa com o app
+fechado) e **Finalizar** abre o registro com os minutos medidos. A duração também
+pode ser digitada como `95`, `1:40` ou `1h40`, sem converter para minutos.
 
 **Custos.** Quatro métricas, três pizzas e rankings em barra, separados por
 tópico para você não rolar a tela inteira atrás de um número. Detalhe em

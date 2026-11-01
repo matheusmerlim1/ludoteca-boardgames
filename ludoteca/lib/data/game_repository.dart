@@ -839,6 +839,9 @@ class GameRepository {
   /// Nome de usuário no Comparajogos, para ler as listas públicas dele.
   static const keyComparajogosUser = 'comparajogos_user';
 
+  /// Partida cronometrada em andamento: "<id do jogo>|<início ISO 8601>".
+  static const keyPartidaEmAndamento = 'partida_em_andamento';
+
   /// As réguas dos rankings de "vale a pena?". Ausente = comparar sem régua.
   static const keyMetaPorPartida = 'meta_por_partida';
   static const keyMetaPorMes = 'meta_por_mes';

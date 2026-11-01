@@ -169,6 +169,29 @@ String duracao(int minutos) {
   return m == 0 ? '${h}h' : '${h}h${m.toString().padLeft(2, '0')}';
 }
 
+/// Duração digitada, em minutos: "95", "1:40", "1h40", "1h 40min", "2h",
+/// "40min". Nulo quando não dá para entender (ou "1:75", minuto inválido).
+int? parseDuracao(String? bruto) {
+  if (bruto == null) return null;
+  final t = bruto.trim().toLowerCase().replaceAll(' ', '');
+  if (t.isEmpty) return null;
+
+  final soMinutos = RegExp(r'^(\d+)(m|min)?$').firstMatch(t);
+  if (soMinutos != null) return int.parse(soMinutos.group(1)!);
+
+  final hm = RegExp(r'^(\d+)(?::|h)(\d{1,2})?(m|min)?$').firstMatch(t);
+  if (hm == null) return null;
+  final h = int.parse(hm.group(1)!);
+  final m = hm.group(2) == null ? 0 : int.parse(hm.group(2)!);
+  if (m >= 60) return null;
+  return h * 60 + m;
+}
+
+/// Minutos no jeito de digitar: 40 -> "40", 100 -> "1:40".
+String duracaoDigitavel(int minutos) => minutos < 60
+    ? '$minutos'
+    : '${minutos ~/ 60}:${(minutos % 60).toString().padLeft(2, '0')}';
+
 /// Horas acumuladas: 12.5 -> "12,5 h". Acima de 100 arredonda, porque a casa
 /// decimal de "137,4 horas" não informa nada.
 String horas(double h) {

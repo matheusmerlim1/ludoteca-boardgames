@@ -237,6 +237,8 @@ class CollectionStore extends ChangeNotifier {
       _bggToken = await _repo.getSetting(GameRepository.keyBggToken);
       _comparajogosUser =
           await _repo.getSetting(GameRepository.keyComparajogosUser);
+      _partidaEmAndamento = _lerPartidaEmAndamento(
+          await _repo.getSetting(GameRepository.keyPartidaEmAndamento));
       await _carregarMetas();
       _error = null;
     } catch (e) {
@@ -251,6 +253,43 @@ class CollectionStore extends ChangeNotifier {
     await _repo.setSetting(GameRepository.keyComparajogosUser, nome);
     _comparajogosUser =
         (nome == null || nome.trim().isEmpty) ? null : nome.trim();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------ partida cronometrada
+
+  /// Partida com cronômetro ligado. Nulo = nenhuma.
+  ///
+  /// Guarda só o jogo e a hora de início, no banco: o tempo decorrido é sempre
+  /// "agora menos o início". Assim o cronômetro continua certo com o app
+  /// fechado durante a partida, ou com o celular reiniciado no meio dela.
+  ({int gameId, DateTime inicio})? _partidaEmAndamento;
+  ({int gameId, DateTime inicio})? get partidaEmAndamento =>
+      _partidaEmAndamento;
+
+  static ({int gameId, DateTime inicio})? _lerPartidaEmAndamento(String? v) {
+    if (v == null) return null;
+    final partes = v.split('|');
+    if (partes.length != 2) return null;
+    final id = int.tryParse(partes[0]);
+    final inicio = DateTime.tryParse(partes[1]);
+    if (id == null || inicio == null) return null;
+    return (gameId: id, inicio: inicio);
+  }
+
+  /// Liga o cronômetro para [gameId], trocando o que estivesse ligado.
+  Future<void> iniciarCronometro(int gameId, {DateTime? agora}) async {
+    final inicio = agora ?? DateTime.now();
+    await _repo.setSetting(GameRepository.keyPartidaEmAndamento,
+        '$gameId|${inicio.toIso8601String()}');
+    _partidaEmAndamento = (gameId: gameId, inicio: inicio);
+    notifyListeners();
+  }
+
+  /// Desliga o cronômetro (partida registrada ou descartada).
+  Future<void> encerrarCronometro() async {
+    await _repo.setSetting(GameRepository.keyPartidaEmAndamento, null);
+    _partidaEmAndamento = null;
     notifyListeners();
   }
 

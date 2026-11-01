@@ -34,9 +34,17 @@ class LogPlaySheet extends StatefulWidget {
     this.itens = const [],
     this.placarInicial = const [],
     this.sugestoesDeNome = const [],
+    this.duracaoInicial,
+    this.dataInicial,
   });
 
   final Game game;
+
+  /// Minutos já medidos (pelo cronômetro), para a folha abrir com eles.
+  final int? duracaoInicial;
+
+  /// Data da partida, quando não é hoje (o cronômetro começou ontem à noite).
+  final DateTime? dataInicial;
 
   /// Quando presente, a folha edita a partida em vez de criar uma nova.
   final Play? existing;
@@ -61,6 +69,8 @@ class LogPlaySheet extends StatefulWidget {
     List<Game> itens = const [],
     List<PlayScore> placarInicial = const [],
     List<String> sugestoesDeNome = const [],
+    int? duracaoInicial,
+    DateTime? dataInicial,
   }) {
     return showModalBottomSheet<({Play play, List<PlayScore> placar})>(
       context: context,
@@ -72,6 +82,8 @@ class LogPlaySheet extends StatefulWidget {
         itens: itens,
         placarInicial: placarInicial,
         sugestoesDeNome: sugestoesDeNome,
+        duracaoInicial: duracaoInicial,
+        dataInicial: dataInicial,
       ),
     );
   }
@@ -101,7 +113,7 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
     super.initState();
     final e = widget.existing;
 
-    _date = e?.playedAt ?? soData(DateTime.now());
+    _date = e?.playedAt ?? soData(widget.dataInicial ?? DateTime.now());
     _players = e?.players ?? widget.game.bestPlayers ?? widget.game.minPlayers;
     _winner = TextEditingController(text: e?.winner ?? '');
     _notes = TextEditingController(text: e?.notes ?? '');
@@ -109,10 +121,12 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
     // Editando uma partida cronometrada, a folha abre em "digitar minutos".
     // O app guarda a duração, não o par início/fim — aquele é só um jeito de
     // chegar no número.
+    // Vindo do cronômetro, também: os minutos medidos já vêm preenchidos.
+    final minutos = e?.durationMinutes ?? widget.duracaoInicial;
     _minutos = TextEditingController(
-      text: e?.durationMinutes == null ? '' : '${e!.durationMinutes}',
+      text: minutos == null ? '' : duracaoDigitavel(minutos),
     );
-    _modo = e?.durationMinutes == null
+    _modo = minutos == null
         ? _ModoDuracao.media
         : _ModoDuracao.minutos;
 
@@ -133,7 +147,7 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
       case _ModoDuracao.media:
         return null;
       case _ModoDuracao.minutos:
-        final n = parseInteiro(_minutos.text);
+        final n = parseDuracao(_minutos.text);
         return (n == null || n <= 0) ? null : n;
       case _ModoDuracao.inicioFim:
         return _duracaoDeInicioFim();
@@ -533,6 +547,7 @@ class _CampoMinutos extends StatelessWidget {
   Widget build(BuildContext context) {
     // Atalhos com a faixa do próprio jogo: quase sempre a partida cai perto
     // de um desses, e o teclado não precisa aparecer.
+    final lido = parseDuracao(controller.text);
     final atalhos = <int>{
       if (game.minPlaytime != null) game.minPlaytime!,
       if (game.averagePlaytime != null) game.averagePlaytime!,
@@ -545,12 +560,22 @@ class _CampoMinutos extends StatelessWidget {
       children: [
         TextField(
           controller: controller,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          // Minutos ("95") ou horas e minutos ("1:40", "1h40"): ninguém
+          // deveria ter de converter 1h40 de cabeça. O teclado de data/hora
+          // do Android tem os dígitos e o ":".
+          keyboardType: TextInputType.datetime,
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9:hHmMiInN ]')),
+          ],
           onChanged: (_) => onMudou(),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'Quanto durou',
-            suffixText: 'min',
+            hintText: 'ex.: 95 ou 1:40',
+            helperText: controller.text.trim().isEmpty
+                ? 'Minutos, ou horas:minutos'
+                : (lido == null || lido <= 0
+                    ? 'Não entendi — use 95 ou 1:40'
+                    : '= ${duracao(lido)}'),
             isDense: true,
           ),
         ),
@@ -564,7 +589,7 @@ class _CampoMinutos extends StatelessWidget {
                   label: Text(duracao(m)),
                   visualDensity: VisualDensity.compact,
                   onPressed: () {
-                    controller.text = '$m';
+                    controller.text = duracaoDigitavel(m);
                     onMudou();
                   },
                 ),

@@ -14,6 +14,7 @@ import '../widgets/disposal_sheet.dart';
 import '../widgets/expansion_picker_sheet.dart';
 import '../widgets/game_cover.dart';
 import '../widgets/log_play_sheet.dart';
+import '../widgets/play_timer.dart';
 import 'game_form_screen.dart';
 
 class GameDetailScreen extends StatefulWidget {
@@ -117,6 +118,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                 _BlocoPartidas(
                   entry: entry,
                   onRegistrar: () => _registrarPartida(game),
+                  onCronometroFinalizado: _carregarPartidas,
                 ),
                 const SizedBox(height: 20),
                 _BlocoCustos(entry: entry, trade: _trade),
@@ -676,14 +678,25 @@ class _Divisor extends StatelessWidget {
 // ------------------------------------------------------------------ partidas
 
 class _BlocoPartidas extends StatelessWidget {
-  const _BlocoPartidas({required this.entry, required this.onRegistrar});
+  const _BlocoPartidas({
+    required this.entry,
+    required this.onRegistrar,
+    required this.onCronometroFinalizado,
+  });
 
   final GameEntry entry;
   final VoidCallback onRegistrar;
 
+  /// Partida registrada pelo cronômetro: o histórico desta ficha recarrega.
+  final Future<void> Function() onCronometroFinalizado;
+
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final emAndamento = context.select<CollectionStore, DateTime?>((s) {
+      final p = s.partidaEmAndamento;
+      return p != null && p.gameId == entry.id ? p.inicio : null;
+    });
 
     return Card(
       child: Padding(
@@ -731,6 +744,36 @@ class _BlocoPartidas extends StatelessWidget {
               icon: const Icon(Icons.add),
               label: const Text('Registrar partida'),
             ),
+            const SizedBox(height: 8),
+            // Começou a jogar agora: liga o cronômetro, e no fim a folha de
+            // registro já abre com os minutos medidos.
+            if (emAndamento == null)
+              OutlinedButton.icon(
+                onPressed: () => iniciarCronometro(context, entry.id),
+                icon: const Icon(Icons.timer_outlined),
+                label: const Text('Iniciar cronômetro'),
+              )
+            else
+              Row(
+                children: [
+                  const Icon(Icons.timer_outlined, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TempoDecorrido(
+                      inicio: emAndamento,
+                      style: text.titleMedium,
+                    ),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: () async {
+                      if (await finalizarCronometro(context)) {
+                        await onCronometroFinalizado();
+                      }
+                    },
+                    child: const Text('Finalizar'),
+                  ),
+                ],
+              ),
           ],
         ),
       ),
