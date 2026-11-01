@@ -9,6 +9,7 @@ import 'package:ludoteca/screens/game_detail_screen.dart';
 import 'package:ludoteca/state/collection_store.dart';
 import 'package:ludoteca/theme.dart';
 import 'package:ludoteca/utils/format.dart';
+import 'package:ludoteca/widgets/log_play_sheet.dart';
 import 'package:ludoteca/widgets/play_timer.dart';
 import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -48,6 +49,61 @@ void main() {
       expect(duracaoDigitavel(120), '2:00');
       expect(parseDuracao(duracaoDigitavel(185)), 185);
     });
+  });
+
+  testWidgets('a folha de registro também liga o cronômetro', (tester) async {
+    late Directory temp;
+    late AppDatabase db;
+    late CollectionStore store;
+    late Game jogo;
+    await tester.runAsync(() async {
+      temp = await Directory.systemTemp.createTemp('ludoteca_crono_f');
+      db = AppDatabase.paraArquivo('${temp.path}/t.db');
+      final repo = GameRepository(database: db);
+      final id = await repo.insertGame(const Game(name: 'Azul'));
+      store = CollectionStore(repository: repo);
+      await store.load();
+      jogo = store.entryById(id)!.game;
+    });
+    addTearDown(() => tester.runAsync(() async {
+          await db.close();
+          await temp.delete(recursive: true);
+        }));
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ChangeNotifierProvider<CollectionStore>.value(
+      value: store,
+      child: MaterialApp(
+        theme: buildTheme(Brightness.light),
+        home: Scaffold(
+          body: Builder(
+            builder: (ctx) => TextButton(
+              onPressed: () => LogPlaySheet.show(ctx, game: jogo),
+              child: const Text('abrir'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('abrir'));
+    await tester.pumpAndSettle();
+
+    final iniciar = find.text('Iniciar cronômetro');
+    expect(iniciar, findsOneWidget);
+    await tester.ensureVisible(iniciar);
+    await tester.pump();
+    await tester.runAsync(() async {
+      await tester.tap(iniciar);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(store.partidaEmAndamento?.gameId, jogo.id);
+    expect(find.text('Salvar partida'), findsNothing);
   });
 
   group('cronômetro', () {

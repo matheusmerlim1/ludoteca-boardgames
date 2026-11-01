@@ -1,11 +1,14 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../models/game.dart';
 import '../models/play.dart';
 import '../models/play_score.dart';
+import '../state/collection_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
+import 'play_timer.dart';
 import 'score_editor.dart';
 
 /// Como a duração da partida foi informada.
@@ -126,9 +129,7 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
     _minutos = TextEditingController(
       text: minutos == null ? '' : duracaoDigitavel(minutos),
     );
-    _modo = minutos == null
-        ? _ModoDuracao.media
-        : _ModoDuracao.minutos;
+    _modo = minutos == null ? _ModoDuracao.media : _ModoDuracao.minutos;
 
     _itemId = e?.itemGameId;
   }
@@ -152,6 +153,20 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
       case _ModoDuracao.inicioFim:
         return _duracaoDeInicioFim();
     }
+  }
+
+  Future<void> _iniciarCronometro() async {
+    final messenger = ScaffoldMessenger.of(context);
+    await iniciarCronometro(context, widget.game.id!);
+    if (!mounted) return;
+    // Recusou trocar o cronômetro de outro jogo: a folha fica aberta.
+    final atual = context.read<CollectionStore>().partidaEmAndamento;
+    if (atual?.gameId != widget.game.id) return;
+    Navigator.of(context).pop();
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Cronômetro ligado. Toque em Finalizar quando acabar.'),
+      duration: Duration(seconds: 3),
+    ));
   }
 
   int? _duracaoDeInicioFim() {
@@ -290,6 +305,18 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
             ),
             const SizedBox(height: 18),
 
+            // Vai começar a jogar agora: em vez de registrar, liga o
+            // cronômetro deste jogo. No fim, Finalizar volta para esta folha
+            // com os minutos medidos.
+            if (widget.existing == null && widget.duracaoInicial == null) ...[
+              OutlinedButton.icon(
+                onPressed: _iniciarCronometro,
+                icon: const Icon(Icons.timer_outlined),
+                label: const Text('Iniciar cronômetro'),
+              ),
+              const SizedBox(height: 18),
+            ],
+
             _SecaoDuracao(
               game: game,
               modo: _modo,
@@ -334,7 +361,8 @@ class _LogPlaySheetState extends State<LogPlaySheet> {
 
             FilledButton(
               onPressed: _salvar,
-              child: Text(widget.existing == null ? 'Salvar partida' : 'Salvar'),
+              child:
+                  Text(widget.existing == null ? 'Salvar partida' : 'Salvar'),
             ),
             const SizedBox(height: 6),
             TextButton(
@@ -467,7 +495,8 @@ class _SecaoDuracao extends StatelessWidget {
           segments: [
             ButtonSegment(
               value: _ModoDuracao.media,
-              label: Text(medio == null ? 'Média' : 'Média (${duracao(medio)})'),
+              label:
+                  Text(medio == null ? 'Média' : 'Média (${duracao(medio)})'),
             ),
             const ButtonSegment(
               value: _ModoDuracao.minutos,
