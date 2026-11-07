@@ -2,26 +2,122 @@ import 'package:flutter/material.dart';
 
 import '../services/update_service.dart';
 
-/// Oferece a versão nova: mostra o que mudou, baixa com progresso e abre o
-/// instalador do Android.
+/// Versão nova: mostra o que mudou, baixa com progresso e abre o instalador
+/// do Android.
+///
+/// Com [automatico] (a consulta que roda a cada abertura), o download começa
+/// sozinho — ninguém precisa tocar em "baixar". O último passo continua sendo
+/// a tela "Atualizar" do próprio Android: app fora da loja não pode se
+/// instalar sem essa confirmação.
 Future<void> showUpdateDialog(
   BuildContext context,
   AppRelease release, {
   UpdateService? service,
+  bool automatico = false,
 }) {
   return showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (_) =>
-        _UpdateDialog(release: release, service: service ?? UpdateService()),
+    builder: (_) => _UpdateDialog(
+      release: release,
+      service: service ?? UpdateService(),
+      automatico: automatico,
+    ),
   );
 }
 
+/// Caixa da primeira abertura depois de atualizar: o que entrou na versão
+/// instalada.
+Future<void> showNovidadesDialog(
+  BuildContext context, {
+  required String version,
+  required String notes,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Ludoteca atualizada para $version'),
+      content: SingleChildScrollView(child: NotasDaVersao(notes: notes)),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('OK'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// O "o que mudou" em duas listas: Novidades e Correções.
+class NotasDaVersao extends StatelessWidget {
+  const NotasDaVersao({super.key, required this.notes});
+
+  final String notes;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final n = ReleaseNotes.parse(notes);
+    if (n.isEmpty) {
+      return Text('Melhorias gerais.', style: text.bodyMedium);
+    }
+
+    Widget secao(String titulo, IconData icone, List<String> itens) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icone, size: 18),
+                  const SizedBox(width: 6),
+                  Text(titulo, style: text.titleSmall),
+                ],
+              ),
+              const SizedBox(height: 4),
+              for (final i in itens)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, top: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('•  ', style: text.bodyMedium),
+                      Expanded(child: Text(i, style: text.bodyMedium)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (n.novidades.isNotEmpty)
+          secao('Novidades', Icons.auto_awesome, n.novidades),
+        if (n.correcoes.isNotEmpty)
+          secao('Correções', Icons.build_outlined, n.correcoes),
+        if (n.outros.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(n.outros, style: text.bodyMedium),
+          ),
+      ],
+    );
+  }
+}
+
 class _UpdateDialog extends StatefulWidget {
-  const _UpdateDialog({required this.release, required this.service});
+  const _UpdateDialog({
+    required this.release,
+    required this.service,
+    required this.automatico,
+  });
 
   final AppRelease release;
   final UpdateService service;
+  final bool automatico;
 
   @override
   State<_UpdateDialog> createState() => _UpdateDialogState();
@@ -33,6 +129,14 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   String? _erro;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.automatico) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _baixarEInstalar());
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final r = widget.release;
@@ -41,16 +145,13 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         : '';
 
     return AlertDialog(
-      title: Text('Versão ${r.version} disponível'),
+      title: Text('Atualizando para a versão ${r.version}'),
       content: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (r.notes.isNotEmpty) ...[
-              Text(r.notes, style: text.bodyMedium),
-              const SizedBox(height: 12),
-            ],
+            NotasDaVersao(notes: r.notes),
             Text(
               'Seus dados continuam no aparelho: a atualização troca só o '
               'app.$mb',

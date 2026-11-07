@@ -58,4 +58,50 @@ void main() {
       expect(await UpdateService(client: client).latestRelease(), isNull);
     });
   });
+
+  group('notas da versão', () {
+    test('seções Novidades e Correções do script de publicação', () {
+      final n = ReleaseNotes.parse('## Novidades\n'
+          '- Cronômetro de partida\n'
+          '- Balões de duração somam\n'
+          '\n'
+          '## Correções\r\n'
+          '- Aviso some em 2 s\r\n');
+      expect(n.novidades, ['Cronômetro de partida', 'Balões de duração somam']);
+      expect(n.correcoes, ['Aviso some em 2 s']);
+      expect(n.outros, isEmpty);
+    });
+
+    test('títulos de commit soltos viram novidade ou correção', () {
+      final n = ReleaseNotes.parse('feat: tempo em 1 40\nfix(ui): botão');
+      expect(n.novidades, ['Tempo em 1 40']);
+      expect(n.correcoes, ['Botão']);
+    });
+
+    test('nota antiga, escrita à mão, fica como texto', () {
+      final n = ReleaseNotes.parse('Ludoteca 1.2.0');
+      expect(n.novidades, isEmpty);
+      expect(n.outros, 'Ludoteca 1.2.0');
+      expect(ReleaseNotes.parse('').isEmpty, isTrue);
+    });
+  });
+
+  test('releaseOf busca o release da tag da versão', () async {
+    late Uri pedido;
+    final client = MockClient((req) async {
+      pedido = req.url;
+      return http.Response(
+          jsonEncode({
+            'tag_name': 'v1.3.0',
+            'body': '## Novidades\n- X',
+            'assets': [
+              {'name': 'l.apk', 'browser_download_url': 'u', 'size': 1}
+            ],
+          }),
+          200);
+    });
+    final r = await UpdateService(client: client).releaseOf('1.3.0');
+    expect(pedido.path, endsWith('/releases/tags/v1.3.0'));
+    expect(r!.notes, '## Novidades\n- X');
+  });
 }

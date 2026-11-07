@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../services/update_service.dart';
+import '../state/collection_store.dart';
 import '../widgets/play_timer.dart';
 import '../widgets/update_dialog.dart';
 import 'collection_screen.dart';
@@ -25,17 +27,41 @@ class _HomeShellState extends State<HomeShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _procurarAtualizacao());
   }
 
-  /// A cada abertura, consulta a página de releases. Sem rede ou sem versão
-  /// nova, fica calado — o botão em Ajustes mostra o motivo se pedirem.
+  /// A cada abertura: primeiro conta o que mudou, se o app acabou de ser
+  /// atualizado; depois consulta a página de releases e, havendo versão nova,
+  /// já baixa e abre o instalador. Sem rede ou sem versão nova, fica calado —
+  /// o botão em Ajustes mostra o motivo se pedirem.
   Future<void> _procurarAtualizacao() async {
     final service = UpdateService();
+    final repo = context.read<CollectionStore>().repository;
+    try {
+      final instalada = await service.installedVersion();
+      final vista = await repo.getSetting(_chaveVersaoVista);
+      if (vista != instalada) {
+        await repo.setSetting(_chaveVersaoVista, instalada);
+      }
+      // Sem registro anterior é a primeira abertura (ou a primeira desde que
+      // o registro existe): não há "antes" para comparar.
+      if (vista != null && UpdateService.isNewer(instalada, vista)) {
+        final r = await service.releaseOf(instalada);
+        if (r != null && mounted) {
+          await showNovidadesDialog(context,
+              version: instalada, notes: r.notes);
+        }
+      }
+    } catch (_) {}
+
     try {
       final nova = await service.checkForUpdate();
       if (nova != null && mounted) {
-        await showUpdateDialog(context, nova, service: service);
+        await showUpdateDialog(context, nova,
+            service: service, automatico: true);
       }
     } catch (_) {}
   }
+
+  /// Última versão que já abriu neste aparelho.
+  static const _chaveVersaoVista = 'versao_vista';
 
   @override
   Widget build(BuildContext context) {

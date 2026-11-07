@@ -42,7 +42,28 @@ try {
 $apk = Join-Path $env:TEMP "ludoteca-$versao.apk"
 Copy-Item (Join-Path $app 'build\app\outputs\flutter-apk\app-release.apk') $apk -Force
 
-if (-not $Notas) { $Notas = "Ludoteca $versao" }
+# Sem -Notas, o "o que mudou" sai dos títulos dos commits desde o último
+# release: feat: vira Novidades, fix: vira Correções (o app mostra essas duas
+# listas na caixa de atualização). Por isso o título do commit deve ser escrito
+# para quem usa o app ler.
+if (-not $Notas) {
+    $raiz = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    git -C $raiz fetch --tags --quiet
+    $anterior = gh release view -R matheusmerlim1/ludoteca-boardgames --json tagName -q .tagName 2>$null
+    $faixa = if ($LASTEXITCODE -eq 0 -and $anterior) { "$anterior..HEAD" } else { 'HEAD' }
+    $titulos = git -C $raiz log $faixa --no-merges --format=%s
+    function Itens($tipo) {
+        $titulos | Where-Object { $_ -match "^$tipo(\([^)]*\))?:\s*(.+)$" } | ForEach-Object {
+            $t = ($_ -replace "^$tipo(\([^)]*\))?:\s*", '').Trim()
+            '- ' + $t.Substring(0, 1).ToUpper() + $t.Substring(1)
+        }
+    }
+    $partes = @()
+    $nov = @(Itens 'feat'); if ($nov.Count) { $partes += "## Novidades`n" + ($nov -join "`n") }
+    $cor = @(Itens 'fix');  if ($cor.Count) { $partes += "## Correções`n" + ($cor -join "`n") }
+    $Notas = if ($partes.Count) { $partes -join "`n`n" } else { "Ludoteca $versao" }
+}
+Write-Host "Notas do release:`n$Notas`n"
 gh release create $tag $apk -R matheusmerlim1/ludoteca-boardgames --title "Ludoteca $versao" --notes $Notas
 if ($LASTEXITCODE -ne 0) { throw 'Não consegui criar o release.' }
 Write-Host "Publicado $tag. Os aparelhos com a Ludoteca vão oferecer a atualização na próxima abertura."

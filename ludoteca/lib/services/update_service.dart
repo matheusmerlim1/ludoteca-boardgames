@@ -22,6 +22,71 @@ class AppRelease {
   final String notes;
 }
 
+/// O "o que mudou" de uma versão, separado em novidades e correções.
+///
+/// As notas do release são montadas pelo `ferramentas/publicar-versao.ps1` a
+/// partir dos títulos dos commits: `feat:` vira novidade, `fix:` vira
+/// correção. Release antigo, escrito à mão, cai inteiro em [outros].
+class ReleaseNotes {
+  const ReleaseNotes({
+    this.novidades = const [],
+    this.correcoes = const [],
+    this.outros = '',
+  });
+
+  final List<String> novidades;
+  final List<String> correcoes;
+  final String outros;
+
+  bool get isEmpty =>
+      novidades.isEmpty && correcoes.isEmpty && outros.trim().isEmpty;
+
+  static ReleaseNotes parse(String body) {
+    final nov = <String>[], cor = <String>[], resto = <String>[];
+    List<String>? secao;
+    for (final bruta in body.split('\n')) {
+      final linha = bruta.trim();
+      if (linha.isEmpty) continue;
+
+      final titulo = RegExp(r'^#+\s*(.*)$').firstMatch(linha);
+      if (titulo != null) {
+        final t = titulo.group(1)!.toLowerCase();
+        secao = t.contains('novidade')
+            ? nov
+            : (t.contains('corre') ? cor : null);
+        if (secao == null) resto.add(titulo.group(1)!);
+        continue;
+      }
+
+      var item = linha;
+      final marcador = RegExp(r'^[-*•]\s+(.*)$').firstMatch(linha);
+      if (marcador != null) item = marcador.group(1)!;
+
+      // Título de commit colado direto nas notas.
+      final commit =
+          RegExp(r'^(feat|fix)(\([^)]*\))?:\s*(.*)$').firstMatch(item);
+      if (commit != null) {
+        (commit.group(1) == 'feat' ? nov : cor).add(_maiuscula(commit.group(3)!));
+        continue;
+      }
+
+      if (secao != null && marcador != null) {
+        secao.add(item);
+      } else {
+        resto.add(linha);
+      }
+    }
+    return ReleaseNotes(
+      novidades: nov,
+      correcoes: cor,
+      outros: resto.join('\n'),
+    );
+  }
+
+  static String _maiuscula(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
 class UpdateException implements Exception {
   UpdateException(this.message);
   final String message;
@@ -62,10 +127,18 @@ class UpdateService {
   }
 
   /// Último release publicado com um APK anexado.
-  Future<AppRelease?> latestRelease() async {
+  Future<AppRelease?> latestRelease() => _release(_latest);
+
+  /// O release de uma versão já publicada — para mostrar, depois de
+  /// atualizar, o que mudou na versão que acabou de entrar.
+  Future<AppRelease?> releaseOf(String version) => _release(
+      'https://api.github.com/repos/'
+      'matheusmerlim1/ludoteca-boardgames/releases/tags/v$version');
+
+  Future<AppRelease?> _release(String url) async {
     late http.Response res;
     try {
-      res = await _client.get(Uri.parse(_latest), headers: const {
+      res = await _client.get(Uri.parse(url), headers: const {
         'Accept': 'application/vnd.github+json',
       }).timeout(const Duration(seconds: 15));
     } on TimeoutException {
