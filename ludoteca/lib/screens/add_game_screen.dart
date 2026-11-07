@@ -376,6 +376,33 @@ class _AddGameScreenState extends State<AddGameScreen> {
 
     if (detalhes == null || !mounted) return;
 
+    // Jogo de outra pessoa, no caminho de registrar a partida: o formulário
+    // "Novo jogo" só teria preço, data de compra e coleção — nada disso vale
+    // para uma caixa que não é sua. A ficha do catálogo basta; salva direto e
+    // devolve o id para a folha de partida abrir em seguida.
+    if (widget.ownershipInicial == Ownership.jogada && !widget.anunciarSalvo) {
+      final id = await store.addGame(
+        Game(
+          // `bggId`, não `id`: no Comparajogos o id da fonte é dele.
+          bggId: detalhes.bggId,
+          name: detalhes.name,
+          year: detalhes.year,
+          minPlayers: detalhes.minPlayers,
+          maxPlayers: detalhes.maxPlayers,
+          bestPlayers: detalhes.bestPlayers,
+          minPlaytime: detalhes.minPlaytime,
+          maxPlaytime: detalhes.maxPlaytime,
+          weight: detalhes.weight,
+          imageUrl: detalhes.imageUrl,
+          thumbUrl: detalhes.thumbUrl,
+          ownership: Ownership.jogada,
+        ),
+        tags: detalhes.tags,
+      );
+      if (mounted) Navigator.of(context).pop(id);
+      return;
+    }
+
     final novoId = await Navigator.of(context).push<int>(
       MaterialPageRoute<int>(
         builder: (_) => GameFormScreen(
