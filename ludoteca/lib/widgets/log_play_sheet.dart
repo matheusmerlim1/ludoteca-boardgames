@@ -589,21 +589,22 @@ class _CampoMinutos extends StatelessWidget {
       children: [
         TextField(
           controller: controller,
-          // Minutos ("95") ou horas e minutos ("1:40", "1h40"): ninguém
+          // Minutos ("95") ou horas e minutos ("1:40", "1h40", "1 40" — o
+          // teclado numérico não tem "h"): ninguém
           // deveria ter de converter 1h40 de cabeça. O teclado de data/hora
           // do Android tem os dígitos e o ":".
           keyboardType: TextInputType.datetime,
           inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[0-9:hHmMiInN ]')),
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9:hHmMiInN .,\-]')),
           ],
           onChanged: (_) => onMudou(),
           decoration: InputDecoration(
             labelText: 'Quanto durou',
-            hintText: 'ex.: 95 ou 1:40',
+            hintText: 'ex.: 95 ou 1 40',
             helperText: controller.text.trim().isEmpty
-                ? 'Minutos, ou horas:minutos'
+                ? 'Minutos, ou hora e minutos: 1 40'
                 : (lido == null || lido <= 0
-                    ? 'Não entendi — use 95 ou 1:40'
+                    ? 'Não entendi — use 95 ou 1 40'
                     : '= ${duracao(lido)}'),
             isDense: true,
           ),
@@ -613,12 +614,23 @@ class _CampoMinutos extends StatelessWidget {
           Wrap(
             spacing: 6,
             children: [
+              // Tocar soma ao que já está no campo: partida que passou da
+              // faixa do jogo vira 1h30 + 45, sem conta de cabeça. Campo vazio
+              // (ou ilegível) só recebe o valor, e o "+" no rótulo diz qual
+              // dos dois vai acontecer.
               for (final m in atalhos)
                 ActionChip(
-                  label: Text(duracao(m)),
+                  label: Text(
+                    (lido != null && lido > 0) ? '+${duracao(m)}' : duracao(m),
+                  ),
                   visualDensity: VisualDensity.compact,
                   onPressed: () {
-                    controller.text = duracaoDigitavel(m);
+                    final atual = parseDuracao(controller.text);
+                    final soma = (atual != null && atual > 0) ? atual + m : m;
+                    controller.text = duracaoDigitavel(soma);
+                    controller.selection = TextSelection.collapsed(
+                      offset: controller.text.length,
+                    );
                     onMudou();
                   },
                 ),

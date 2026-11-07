@@ -36,6 +36,17 @@ void main() {
       expect(parseDuracao('0:45'), 45);
     });
 
+    test('teclado numérico: "1 00" é 1h, e ".", "," e "-" também separam', () {
+      expect(parseDuracao('1 00'), 60);
+      expect(parseDuracao('1 40'), 100);
+      expect(parseDuracao(' 2  15 '), 135);
+      expect(parseDuracao('1.30'), 90);
+      expect(parseDuracao('1,30'), 90);
+      expect(parseDuracao('1-05'), 65);
+      expect(parseDuracao('100'), 100); // sem separador continua minutos
+      expect(parseDuracao('1 75'), isNull);
+    });
+
     test('o que não dá para entender vira nulo', () {
       expect(parseDuracao(''), isNull);
       expect(parseDuracao('1:75'), isNull);
@@ -104,6 +115,50 @@ void main() {
 
     expect(store.partidaEmAndamento?.gameId, jogo.id);
     expect(find.text('Salvar partida'), findsNothing);
+  });
+
+  testWidgets('tocar no balão de duração soma ao que já está no campo',
+      (tester) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    const jogo = Game(id: 1, name: 'Brass', minPlaytime: 90, maxPlaytime: 120);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(Brightness.light),
+      home: Scaffold(
+        body: Builder(
+          builder: (ctx) => TextButton(
+            onPressed: () => LogPlaySheet.show(ctx, game: jogo),
+            child: const Text('abrir'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('abrir'));
+    await tester.pumpAndSettle();
+
+    final minutos = find.text('Minutos');
+    await tester.ensureVisible(minutos);
+    await tester.tap(minutos);
+    await tester.pumpAndSettle();
+
+    String campo() => tester
+        .widget<TextField>(find.widgetWithText(TextField, 'Quanto durou'))
+        .controller!
+        .text;
+
+    // Campo vazio: o balão só preenche.
+    await tester.ensureVisible(find.text('1h30'));
+    await tester.tap(find.text('1h30'));
+    await tester.pumpAndSettle();
+    expect(campo(), '1:30');
+
+    // Com tempo no campo: o rótulo ganha "+" e o toque soma.
+    expect(find.text('+1h45'), findsOneWidget);
+    await tester.tap(find.text('+1h45'));
+    await tester.pumpAndSettle();
+    expect(campo(), '3:15');
   });
 
   group('cronômetro', () {

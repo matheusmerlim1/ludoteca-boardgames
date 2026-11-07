@@ -171,8 +171,20 @@ String duracao(int minutos) {
 
 /// Duração digitada, em minutos: "95", "1:40", "1h40", "1h 40min", "2h",
 /// "40min". Nulo quando não dá para entender (ou "1:75", minuto inválido).
+///
+/// Também "1 00", "1.30", "1,30", "1-30": o teclado numérico do celular não
+/// tem "h" e às vezes nem ":". Dois dígitos depois do separador dizem que são
+/// minutos de uma hora — "1 00" é 1h, não 100 minutos.
 int? parseDuracao(String? bruto) {
   if (bruto == null) return null;
+
+  final separado = RegExp(r'^(\d+)\s*[ .,\-]\s*(\d{2})$').firstMatch(bruto.trim());
+  if (separado != null) {
+    final m = int.parse(separado.group(2)!);
+    if (m >= 60) return null;
+    return int.parse(separado.group(1)!) * 60 + m;
+  }
+
   final t = bruto.trim().toLowerCase().replaceAll(' ', '');
   if (t.isEmpty) return null;
 
