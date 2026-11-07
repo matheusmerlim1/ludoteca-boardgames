@@ -159,6 +159,13 @@ void main() {
     await tester.tap(find.text('+1h45'));
     await tester.pumpAndSettle();
     expect(campo(), '3:15');
+
+    // Os balões fixos valem para qualquer jogo e também somam.
+    await tester.tap(find.text('+15min'));
+    await tester.pumpAndSettle();
+    expect(campo(), '3:30');
+    expect(find.text('+30min'), findsOneWidget);
+    expect(find.text('+1h'), findsOneWidget);
   });
 
   group('cronômetro', () {

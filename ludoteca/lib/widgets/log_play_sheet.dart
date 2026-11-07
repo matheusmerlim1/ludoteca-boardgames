@@ -577,7 +577,12 @@ class _CampoMinutos extends StatelessWidget {
     // Atalhos com a faixa do próprio jogo: quase sempre a partida cai perto
     // de um desses, e o teclado não precisa aparecer.
     final lido = parseDuracao(controller.text);
+    // 15, 30 e 60 servem a qualquer jogo e, como os balões somam, também
+    // completam o tempo: 1h30 + 15 chega a 1h45 sem teclado.
     final atalhos = <int>{
+      15,
+      30,
+      60,
       if (game.minPlaytime != null) game.minPlaytime!,
       if (game.averagePlaytime != null) game.averagePlaytime!,
       if (game.maxPlaytime != null) game.maxPlaytime!,
@@ -613,6 +618,7 @@ class _CampoMinutos extends StatelessWidget {
           const SizedBox(height: 8),
           Wrap(
             spacing: 6,
+            runSpacing: 6,
             children: [
               // Tocar soma ao que já está no campo: partida que passou da
               // faixa do jogo vira 1h30 + 45, sem conta de cabeça. Campo vazio
