@@ -1,7 +1,7 @@
 name: ludoteca
 description: Gerenciador da minha coleção de jogos de tabuleiro.
 publish_to: "none"
-version: 1.4.0+6
+version: 1.4.1+7
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

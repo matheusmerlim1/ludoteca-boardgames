@@ -163,7 +163,11 @@ class SincronizadorDePartidas {
       nomesJogo: _nomes(principal),
       bggId: principal.bggId,
       data: play.playedAt,
-      duracaoMinutos: play.durationMinutes,
+      // Sem cronometrar, o app conta a média do jogo (a mesma que a folha de
+      // registro mostra em "Média"); lá vai o mesmo número, e não zero.
+      duracaoMinutos: play.hasMeasuredDuration
+          ? play.durationMinutes
+          : (jogo.averagePlaytime ?? principal.averagePlaytime),
       notas: play.notes,
       jogadores: [
         for (final s in placar)

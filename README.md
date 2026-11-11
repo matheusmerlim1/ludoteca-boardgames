@@ -287,7 +287,7 @@ Como a partida é traduzida:
 | jogo | `product_id`, pelo id do BGG ou pelo nome exato (português, depois o principal) |
 | caixa da série jogada | o próprio jogo da partida |
 | expansão jogada | `addons` do jogo-base |
-| duração em minutos | `duration` em **segundos** (sem cronometrar vai 0) |
+| duração em minutos | `duration` em **segundos**: o tempo digitado ou cronometrado; sem isso, a média do jogo, a mesma que o app conta nas horas (só vai 0 se o jogo não tem duração cadastrada) |
 | placar | participantes: o seu nome (usuário, nome ou primeiro nome da conta) vira o participante ligado à conta; os outros são achados pelo nome ou criados |
 | vencedor | `is_winner`, com `win_condition: MANUAL`, para o site não recalcular pelo maior placar (erraria em cooperativo) |
 | sem placar | só você, porque o site exige ao menos um participante |

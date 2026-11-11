@@ -235,7 +235,10 @@ class AppDatabase {
   ///          sabe que ficou velho); `plays.cj_erro` guarda por que não foi.
   ///          `cj_apagar` é a fila do que foi apagado aqui e falta apagar lá.
   ///          Partidas antigas ficam como estão: nada é enviado sozinho.
-  static const _version = 11;
+  /// v11 → v12: a 1.4.0 mandava duração zero quando a partida usava a média
+  ///          do jogo. As que já foram assim voltam para a fila; o envio
+  ///          seguinte apaga a cópia zerada lá e manda a certa.
+  static const _version = 12;
 
   Database? _db;
 
@@ -318,6 +321,13 @@ class AppDatabase {
           );
           await db.execute('ALTER TABLE plays ADD COLUMN cj_erro TEXT');
           await db.execute(_cjApagarDdl);
+        }
+        if (from < 12 && from >= 11) {
+          await db.execute(
+            'UPDATE plays SET cj_pendente = cj_pendente + 1 '
+            'WHERE cj_play_id IS NOT NULL '
+            'AND (duration_minutes IS NULL OR duration_minutes <= 0)',
+          );
         }
       },
     );

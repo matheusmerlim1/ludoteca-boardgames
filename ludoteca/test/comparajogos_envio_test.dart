@@ -331,6 +331,23 @@ void main() {
       expect(p['duration'], 2400);
     });
 
+    test('sem cronometrar vai a média do jogo, como o app conta', () async {
+      final castle = await repo.insertGame(
+          const Game(name: 'Azul', minPlaytime: 20, maxPlaytime: 30));
+      await store.refresh();
+      await entrar();
+      await store.logPlay(Play(gameId: castle, playedAt: DateTime(2026, 11, 11)));
+      await store.enviarPendentes();
+      expect(cj.partidas.values.single['duration'], 25 * 60);
+    });
+
+    test('jogo sem duração cadastrada e sem cronômetro vai zero', () async {
+      await entrar();
+      await store.logPlay(Play(gameId: azul, playedAt: DateTime(2026, 11, 11)));
+      await store.enviarPendentes();
+      expect(cj.partidas.values.single['duration'], 0);
+    });
+
     test('sem rede fica na fila e vai na rodada seguinte', () async {
       await entrar();
       cj.semRede = true;
@@ -447,5 +464,37 @@ void main() {
       expect(cj.partidas, isEmpty);
       expect((await repo.situacaoDoEnvio()).pendentes, 1);
     });
+  });
+
+  test('migração 11 → 12 repõe na fila as partidas que foram com duração zero',
+      () async {
+    final temp = await Directory.systemTemp.createTemp('ludoteca_cj_mig');
+    final caminho = '${temp.path}/v11.db';
+    final antigo = await databaseFactory.openDatabase(
+      caminho,
+      options: OpenDatabaseOptions(
+        version: 11,
+        onCreate: (db, v) => db.execute('''
+          CREATE TABLE plays (
+            id INTEGER PRIMARY KEY, duration_minutes INTEGER,
+            cj_play_id INTEGER, cj_pendente INTEGER NOT NULL DEFAULT 0,
+            cj_erro TEXT)
+        '''),
+      ),
+    );
+    await antigo.insert('plays', {'id': 1, 'cj_play_id': 65454});             // média: volta
+    await antigo.insert('plays', {'id': 2, 'cj_play_id': 7, 'duration_minutes': 40}); // fica
+    await antigo.insert('plays', {'id': 3});                                    // nunca foi: fica
+    await antigo.close();
+
+    final db = AppDatabase.paraArquivo(caminho);
+    final d = await db.db;
+    expect(await d.getVersion(), AppDatabase.versaoAtual);
+    final linhas = {
+      for (final m in await d.query('plays')) m['id']: m['cj_pendente'],
+    };
+    expect(linhas, {1: 1, 2: 0, 3: 0});
+    await db.close();
+    await temp.delete(recursive: true);
   });
 }
