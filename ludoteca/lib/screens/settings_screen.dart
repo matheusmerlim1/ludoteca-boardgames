@@ -8,6 +8,7 @@ import '../services/comparajogos_service.dart';
 import '../services/share_service.dart';
 import '../services/tag_backfill_service.dart';
 import '../services/update_service.dart';
+import '../widgets/comparajogos_envio_card.dart';
 import '../widgets/update_dialog.dart';
 import '../services/game_catalog.dart';
 import '../state/collection_store.dart';
@@ -46,6 +47,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _CartaoSugestoes(store: store),
           const SizedBox(height: 16),
           _CartaoTemas(store: store),
+          const SizedBox(height: 16),
+          ComparajogosEnvioCard(store: store),
           const SizedBox(height: 16),
           _CartaoToken(store: store),
           const SizedBox(height: 16),

@@ -160,13 +160,17 @@ void main() {
 
     test('migração 9 → 10 cria a tabela sem tocar no resto', () async {
       final caminho = '${temp.path}/antigo.db';
-      // Banco "da versão anterior": só o número da versão importa aqui, porque
-      // o passo 9 → 10 apenas cria a tabela nova.
+      // Banco "da versão anterior": o passo 9 → 10 apenas cria a tabela nova;
+      // `plays` existe porque o passo seguinte (10 → 11) acrescenta colunas
+      // nela, e todo banco real da versão 9 já a tem.
       final antigo = await databaseFactory.openDatabase(
         caminho,
         options: OpenDatabaseOptions(
           version: 9,
-          onCreate: (db, v) => db.execute('CREATE TABLE marcador (x INTEGER)'),
+          onCreate: (db, v) async {
+            await db.execute('CREATE TABLE marcador (x INTEGER)');
+            await db.execute('CREATE TABLE plays (id INTEGER PRIMARY KEY)');
+          },
         ),
       );
       await antigo.insert('marcador', {'x': 42});

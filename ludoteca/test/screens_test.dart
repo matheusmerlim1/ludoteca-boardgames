@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:ludoteca/data/database.dart';
 import 'package:ludoteca/data/game_repository.dart';
 import 'package:ludoteca/models/game.dart';
@@ -12,7 +14,9 @@ import 'package:ludoteca/screens/costs_screen.dart';
 import 'package:ludoteca/screens/game_detail_screen.dart';
 import 'package:ludoteca/screens/game_form_screen.dart';
 import 'package:ludoteca/screens/settings_screen.dart';
+import 'package:ludoteca/services/comparajogos_partidas.dart';
 import 'package:ludoteca/services/share_service.dart';
+import 'package:ludoteca/services/sincronizador_partidas.dart';
 import 'package:ludoteca/state/collection_store.dart';
 import 'package:ludoteca/utils/format.dart';
 import 'package:ludoteca/widgets/game_card.dart';
@@ -49,11 +53,13 @@ Future<void> _montaStore(
   String? token,
   bool comAcento = false,
   bool comCapas = false,
+  String? contaCj,
 }) async {
   await tester.runAsync(
     () => _montaStoreReal(
       comDados: comDados,
       token: token,
+      contaCj: contaCj,
       comAcento: comAcento,
       comCapas: comCapas,
     ),
@@ -65,6 +71,7 @@ Future<void> _montaStore(
 Future<void> _montaStoreReal({
   bool comDados = false,
   String? token,
+  String? contaCj,
   bool comAcento = false,
   bool comCapas = false,
 }) async {
@@ -157,7 +164,18 @@ Future<void> _montaStoreReal({
     await repo.setSetting(GameRepository.keyBggToken, token);
   }
 
-  _store = CollectionStore(repository: repo);
+  if (contaCj != null) {
+    await repo.setSetting(GameRepository.keyContaEnvioComparajogos, contaCj);
+  }
+  _store = CollectionStore(repository: repo)
+    // Sem WebView em teste: a sessão "expirou", e nada vai para a rede.
+    ..criarSincronizador = (r) => SincronizadorDePartidas(
+          repo: r,
+          envio: EnvioDePartidas(
+            fonte: _SemSessao(),
+            client: MockClient((_) async => http.Response('', 500)),
+          ),
+        );
   await _store.load();
 }
 
@@ -200,6 +218,11 @@ Future<void> _renderiza(
   await tester.pumpAndSettle();
 }
 
+class _SemSessao implements FonteDeToken {
+  @override
+  Future<String?> token({bool renovar = false}) async => null;
+}
+
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -214,9 +237,21 @@ void main() {
         await _montaStore(tester);
         await _renderiza(tester, const SettingsScreen(), brilho: brilho);
 
+        expect(find.text('Sugestões de melhoria'), findsOneWidget);
+        await tester.dragUntilVisible(
+          find.text('Entrar no Comparajogos'),
+          find.byType(ListView),
+          const Offset(0, -220),
+        );
+        expect(find.text('Partidas no Comparajogos'), findsOneWidget);
+        expect(find.text('desligado'), findsOneWidget);
+        await tester.dragUntilVisible(
+          find.text('não configurado'),
+          find.byType(ListView),
+          const Offset(0, -220),
+        );
         expect(find.text('Token do BGG'), findsOneWidget);
         expect(find.text('não configurado'), findsOneWidget);
-        expect(find.text('Sugestões de melhoria'), findsOneWidget);
 
         // A tela é uma lista: o que está abaixo da dobra só existe depois de
         // rolar até lá.
@@ -233,9 +268,36 @@ void main() {
         await _montaStore(tester, token: 'tok_de_teste');
         await _renderiza(tester, const SettingsScreen(), brilho: brilho);
 
+        await tester.dragUntilVisible(
+          find.text('Remover'),
+          find.byType(ListView),
+          const Offset(0, -220),
+        );
         expect(find.text('configurado'), findsOneWidget);
         // Com token, aparece também o botão de remover.
         expect(find.text('Remover'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('Ajustes com conta do Comparajogos e sessão expirada',
+          (tester) async {
+        await _montaStore(tester, comDados: true, contaCj: 'matheus');
+        // A partida nova entra na fila; o envio para por falta de sessão.
+        await tester.runAsync(() async {
+          final jogo = _store.allEntries.first.game;
+          await _store.logPlay(Play(gameId: jogo.id!, playedAt: DateTime(2026, 11, 1)));
+          await _store.enviarPendentes();
+        });
+        await _renderiza(tester, const SettingsScreen(), brilho: brilho);
+        await tester.dragUntilVisible(
+          find.text('Sair da conta'),
+          find.byType(ListView),
+          const Offset(0, -220),
+        );
+        expect(find.text('entre de novo'), findsOneWidget);
+        expect(find.textContaining('sessão do Comparajogos expirou'), findsOneWidget);
+        expect(find.text('Entrar no Comparajogos'), findsOneWidget);
+        expect(find.text('Na fila para enviar'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
 

@@ -133,6 +133,13 @@ class AppDatabase {
   /// Compras avulsas do hobby que não pertencem a um jogo: kit de sleeves,
   /// playmat, organizador. Tabela própria para não entrarem na estante, no
   /// custo por partida nem no "nunca jogado" — só nos gastos.
+  /// Partidas apagadas no app que ainda falta apagar no Comparajogos.
+  static const _cjApagarDdl = '''
+    CREATE TABLE cj_apagar (
+      cj_play_id INTEGER PRIMARY KEY
+    )
+  ''';
+
   static const _extrasDdl = '''
     CREATE TABLE extras (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,7 +227,15 @@ class AppDatabase {
   /// v9 → v10: tabela `extras`, para compras avulsas (kit de sleeves,
   ///          playmat, organizador) que entram no custo do mês sem ser um
   ///          jogo. Só cria a tabela: nada do que já existe muda.
-  static const _version = 10;
+  /// v10 → v11: envio das partidas para a conta do Comparajogos.
+  ///
+  ///          `plays.cj_play_id` é o id da partida lá (nulo = nunca foi);
+  ///          `plays.cj_pendente` > 0 = está na fila para ir (é um contador:
+  ///          editar durante um envio sobe o número, e o envio que terminar
+  ///          sabe que ficou velho); `plays.cj_erro` guarda por que não foi.
+  ///          `cj_apagar` é a fila do que foi apagado aqui e falta apagar lá.
+  ///          Partidas antigas ficam como estão: nada é enviado sozinho.
+  static const _version = 11;
 
   Database? _db;
 
@@ -296,6 +311,14 @@ class AppDatabase {
         if (from < 10) {
           await db.execute(_extrasDdl);
         }
+        if (from < 11) {
+          await db.execute('ALTER TABLE plays ADD COLUMN cj_play_id INTEGER');
+          await db.execute(
+            'ALTER TABLE plays ADD COLUMN cj_pendente INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute('ALTER TABLE plays ADD COLUMN cj_erro TEXT');
+          await db.execute(_cjApagarDdl);
+        }
       },
     );
   }
@@ -363,9 +386,13 @@ class AppDatabase {
         -- Qual caixa do grupo foi jogada. Nulo = partida do jogo em si, ou
         -- você não quis detalhar. ON DELETE SET NULL: remover uma caixa não
         -- pode apagar o histórico de partidas do grupo.
-        item_game_id     INTEGER REFERENCES games(id) ON DELETE SET NULL
+        item_game_id     INTEGER REFERENCES games(id) ON DELETE SET NULL,
+        cj_play_id       INTEGER,
+        cj_pendente      INTEGER NOT NULL DEFAULT 0,
+        cj_erro          TEXT
       )
     ''');
+    await db.execute(_cjApagarDdl);
 
     await db.execute(_settingsDdl);
     await db.execute(_scoresDdl);

@@ -1,4 +1,6 @@
-﻿import 'package:collection/collection.dart';
+﻿import 'dart:async';
+
+import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 
 import '../data/game_repository.dart';
@@ -8,7 +10,10 @@ import '../models/play.dart';
 import '../models/play_score.dart';
 import '../models/suggestion.dart';
 import '../models/trade.dart';
+import '../services/comparajogos_login.dart';
+import '../services/comparajogos_partidas.dart';
 import '../services/game_catalog.dart';
+import '../services/sincronizador_partidas.dart';
 import '../utils/format.dart';
 
 /// Seções do menu de ordenação.
@@ -77,6 +82,30 @@ class CollectionStore extends ChangeNotifier {
   /// folha por um dado que muda uma vez na vida.
   String? _comparajogosUser;
   String? get comparajogosUser => _comparajogosUser;
+
+  /// Conta do Comparajogos que recebe as partidas registradas aqui. Nulo =
+  /// não envia (o padrão: só depois de entrar em Ajustes).
+  String? _contaEnvio;
+  String? get contaEnvioComparajogos => _contaEnvio;
+  bool get enviaPartidasAoComparajogos => _contaEnvio != null;
+
+  /// Como montar quem envia. Os testes trocam por um com API falsa.
+  SincronizadorDePartidas Function(GameRepository repo) criarSincronizador =
+      (repo) => SincronizadorDePartidas(
+            repo: repo,
+            envio: EnvioDePartidas(fonte: FonteDeTokenWebView()),
+          );
+  SincronizadorDePartidas? _sincronizador;
+
+  ({int pendentes, int comErro}) _situacaoEnvio = (pendentes: 0, comErro: 0);
+
+  /// Quantas partidas faltam ir e quantas não foram de vez.
+  ({int pendentes, int comErro}) get situacaoEnvio => _situacaoEnvio;
+
+  RodadaDeEnvio? _ultimaRodada;
+
+  /// Como terminou o último envio (para Ajustes dizer "sessão expirou").
+  RodadaDeEnvio? get ultimaRodadaDeEnvio => _ultimaRodada;
 
   /// Etiquetas existentes, com contagem, e quais cada jogo tem.
   List<TagCount> _tags = const [];
@@ -237,6 +266,9 @@ class CollectionStore extends ChangeNotifier {
       _bggToken = await _repo.getSetting(GameRepository.keyBggToken);
       _comparajogosUser =
           await _repo.getSetting(GameRepository.keyComparajogosUser);
+      _contaEnvio =
+          await _repo.getSetting(GameRepository.keyContaEnvioComparajogos);
+      _situacaoEnvio = await _repo.situacaoDoEnvio();
       _partidaEmAndamento = _lerPartidaEmAndamento(
           await _repo.getSetting(GameRepository.keyPartidaEmAndamento));
       await _carregarMetas();
@@ -247,6 +279,10 @@ class CollectionStore extends ChangeNotifier {
       _loading = false;
       notifyListeners();
     }
+    // O que ficou na fila (sem rede na hora) vai a cada abertura do app.
+    if (enviaPartidasAoComparajogos && _error == null) {
+      unawaited(enviarPendentes());
+    }
   }
 
   Future<void> setComparajogosUser(String? nome) async {
@@ -254,6 +290,52 @@ class CollectionStore extends ChangeNotifier {
     _comparajogosUser =
         (nome == null || nome.trim().isEmpty) ? null : nome.trim();
     notifyListeners();
+  }
+
+  // ------------------------------------------- envio ao Comparajogos
+
+  /// Entrou na conta: daqui em diante, toda partida registrada vai para lá.
+  Future<void> entrarNoComparajogos(ContaComparajogos conta) async {
+    final nome = conta.username.isEmpty ? conta.exibicao : conta.username;
+    await _repo.setSetting(GameRepository.keyContaEnvioComparajogos, nome);
+    _contaEnvio = nome;
+    _ultimaRodada = null;
+    notifyListeners();
+    unawaited(enviarPendentes());
+  }
+
+  /// Para de enviar. O que estava na fila continua lá, para o próximo login.
+  Future<void> sairDoComparajogos() async {
+    await _repo.setSetting(GameRepository.keyContaEnvioComparajogos, null);
+    _contaEnvio = null;
+    _ultimaRodada = null;
+    notifyListeners();
+  }
+
+  /// Manda o que está na fila. Nulo se não há conta. Nunca lança: o erro
+  /// volta na rodada e a fila fica para a próxima vez.
+  Future<RodadaDeEnvio?> enviarPendentes() async {
+    if (!enviaPartidasAoComparajogos) return null;
+    _sincronizador ??= criarSincronizador(_repo);
+    RodadaDeEnvio r;
+    try {
+      r = await _sincronizador!.sincronizar();
+    } catch (e) {
+      r = RodadaDeEnvio(erro: '$e');
+    }
+    _ultimaRodada = r;
+    try {
+      _situacaoEnvio = await _repo.situacaoDoEnvio();
+    } catch (_) {}
+    notifyListeners();
+    return r;
+  }
+
+  Future<void> tentarDeNovoOsEnviosComErro() async {
+    await _repo.tentarDeNovoOsComErro();
+    _situacaoEnvio = await _repo.situacaoDoEnvio();
+    notifyListeners();
+    await enviarPendentes();
   }
 
   // ------------------------------------------------ partida cronometrada
@@ -635,7 +717,10 @@ class CollectionStore extends ChangeNotifier {
   Future<int> logPlay(Play play, {List<PlayScore> placar = const []}) async {
     final id = await _repo.insertPlay(play);
     if (placar.isNotEmpty) await _repo.setScores(id, placar);
+    if (enviaPartidasAoComparajogos) await _repo.marcarParaEnvio(id);
     await refresh();
+    // Sem esperar: registrar não pode depender da rede.
+    if (enviaPartidasAoComparajogos) unawaited(enviarPendentes());
     return id;
   }
 
@@ -643,7 +728,11 @@ class CollectionStore extends ChangeNotifier {
     await _repo.updatePlay(play);
     // Nulo = "não mexa no placar"; lista vazia = "apague o que havia".
     if (placar != null) await _repo.setScores(play.id!, placar);
+    if (enviaPartidasAoComparajogos) {
+      await _repo.marcarParaEnvio(play.id!, soSeJaVinculada: true);
+    }
     await refresh();
+    if (enviaPartidasAoComparajogos) unawaited(enviarPendentes());
   }
 
   /// Registra a saída do jogo da coleção (venda, troca ou doação).
@@ -750,7 +839,9 @@ class CollectionStore extends ChangeNotifier {
   }
 
   Future<void> deletePlay(int playId) async {
+    // Se já tinha ido para o Comparajogos, o repositório põe na fila de apagar.
     await _repo.deletePlay(playId);
     await refresh();
+    if (enviaPartidasAoComparajogos) unawaited(enviarPendentes());
   }
 }

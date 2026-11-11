@@ -121,6 +121,12 @@ class GameRepository {
     return rows.isEmpty ? null : Game.fromMap(rows.first);
   }
 
+  Future<Play?> playById(int id) async {
+    final db = await _db;
+    final rows = await db.query('plays', where: 'id = ?', whereArgs: [id], limit: 1);
+    return rows.isEmpty ? null : Play.fromMap(rows.first);
+  }
+
   Future<List<Play>> playsFor(int gameId) async {
     final db = await _db;
     final rows = await db.query(
@@ -182,9 +188,146 @@ class GameRepository {
     );
   }
 
+  /// Apaga a partida. Se ela já tinha ido para o Comparajogos, o id de lá
+  /// entra na fila `cj_apagar` na mesma transação — senão ela ficaria órfã lá.
   Future<void> deletePlay(int id) async {
     final db = await _db;
-    await db.delete('plays', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      final r = await txn.query('plays',
+          columns: ['cj_play_id'], where: 'id = ?', whereArgs: [id]);
+      final cj = r.isEmpty ? null : r.first['cj_play_id'] as int?;
+      if (cj != null) {
+        await txn.insert('cj_apagar', {'cj_play_id': cj},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await txn.delete('plays', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  // ------------------------------------------------- envio ao Comparajogos
+
+  /// Põe a partida na fila de envio (nova ou editada). Limpa o erro anterior.
+  ///
+  /// [soSeJaVinculada]: numa edição, só entra quem já foi (ou ia) para lá.
+  /// Uma partida antiga, de antes do login, pode já ter sido lançada à mão no
+  /// site — mandar ao editar criaria uma cópia.
+  Future<void> marcarParaEnvio(int playId, {bool soSeJaVinculada = false}) async {
+    final db = await _db;
+    await db.rawUpdate(
+      'UPDATE plays SET cj_pendente = cj_pendente + 1, cj_erro = NULL '
+      'WHERE id = ?'
+      '${soSeJaVinculada ? ' AND (cj_play_id IS NOT NULL OR cj_pendente > 0 OR cj_erro IS NOT NULL)' : ''}',
+      [playId],
+    );
+  }
+
+  /// O que está na fila, mais antigas primeiro.
+  Future<List<({int playId, int versao, int? cjId})>> partidasParaEnviar() async {
+    final db = await _db;
+    final r = await db.query('plays',
+        columns: ['id', 'cj_pendente', 'cj_play_id'],
+        where: 'cj_pendente > 0',
+        orderBy: 'played_at, id');
+    return [
+      for (final m in r)
+        (
+          playId: m['id'] as int,
+          versao: m['cj_pendente'] as int,
+          cjId: m['cj_play_id'] as int?,
+        ),
+    ];
+  }
+
+  /// Registra o envio. Só tira da fila se ninguém editou a partida enquanto
+  /// ela ia (a [versao] ainda é a mesma); senão ela vai de novo, já com o id
+  /// novo para o envio seguinte apagar a cópia velha.
+  ///
+  /// Devolve falso se a partida foi apagada no meio do envio.
+  Future<bool> gravarEnvio(int playId, {required int versao, required int cjId}) async {
+    final db = await _db;
+    final n = await db.rawUpdate(
+      'UPDATE plays SET cj_play_id = ?, cj_erro = NULL, '
+      'cj_pendente = CASE WHEN cj_pendente = ? THEN 0 ELSE cj_pendente END '
+      'WHERE id = ?',
+      [cjId, versao, playId],
+    );
+    return n > 0;
+  }
+
+  /// A cópia antiga lá já foi apagada (edição): esquece o id dela.
+  Future<void> esquecerEnvio(int playId) async {
+    final db = await _db;
+    await db.update('plays', {'cj_play_id': null},
+        where: 'id = ?', whereArgs: [playId]);
+  }
+
+  /// Envio que não vai dar certo tentando de novo (ex.: jogo que não existe
+  /// lá): sai da fila com o motivo, para aparecer em Ajustes.
+  Future<void> falharEnvio(int playId, String motivo) async {
+    final db = await _db;
+    await db.update('plays', {'cj_pendente': 0, 'cj_erro': motivo},
+        where: 'id = ?', whereArgs: [playId]);
+  }
+
+  Future<List<int>> partidasParaApagarNoComparajogos() async {
+    final db = await _db;
+    final r = await db.query('cj_apagar');
+    return [for (final m in r) m['cj_play_id'] as int];
+  }
+
+  Future<void> enfileirarApagarNoComparajogos(int cjId) async {
+    final db = await _db;
+    await db.insert('cj_apagar', {'cj_play_id': cjId},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  Future<void> apagadaNoComparajogos(int cjId) async {
+    final db = await _db;
+    await db.delete('cj_apagar', where: 'cj_play_id = ?', whereArgs: [cjId]);
+  }
+
+  /// Quantas estão na fila e quantas falharam de vez, para Ajustes.
+  Future<({int pendentes, int comErro})> situacaoDoEnvio() async {
+    final db = await _db;
+    final r = await db.rawQuery('''
+      SELECT
+        (SELECT COUNT(*) FROM plays WHERE cj_pendente > 0) +
+        (SELECT COUNT(*) FROM cj_apagar)                         AS pendentes,
+        (SELECT COUNT(*) FROM plays
+          WHERE cj_pendente = 0 AND cj_erro IS NOT NULL)         AS com_erro
+    ''');
+    return (
+      pendentes: (r.first['pendentes'] as int?) ?? 0,
+      comErro: (r.first['com_erro'] as int?) ?? 0,
+    );
+  }
+
+  /// Volta para a fila tudo que falhou de vez (botão "tentar de novo").
+  Future<void> tentarDeNovoOsComErro() async {
+    final db = await _db;
+    await db.rawUpdate(
+      'UPDATE plays SET cj_pendente = 1, cj_erro = NULL '
+      'WHERE cj_pendente = 0 AND cj_erro IS NOT NULL',
+    );
+  }
+
+  /// Os erros, com o jogo, para mostrar o que não foi.
+  Future<List<({String jogo, String data, String motivo})>> errosDeEnvio() async {
+    final db = await _db;
+    final r = await db.rawQuery('''
+      SELECT COALESCE(g.name_pt, g.name) AS jogo, p.played_at, p.cj_erro
+        FROM plays p JOIN games g ON g.id = p.game_id
+       WHERE p.cj_pendente = 0 AND p.cj_erro IS NOT NULL
+       ORDER BY p.played_at DESC
+    ''');
+    return [
+      for (final m in r)
+        (
+          jogo: '${m['jogo']}',
+          data: '${m['played_at']}',
+          motivo: '${m['cj_erro']}',
+        ),
+    ];
   }
 
   /// Insere vários jogos de uma vez (importação da planilha). Numa transação,
@@ -838,6 +981,10 @@ class GameRepository {
 
   /// Nome de usuário no Comparajogos, para ler as listas públicas dele.
   static const keyComparajogosUser = 'comparajogos_user';
+
+  /// Conta do Comparajogos para onde vão as partidas (o nome, só para
+  /// mostrar). Ausente = não envia. A sessão em si fica no WebView, não aqui.
+  static const keyContaEnvioComparajogos = 'cj_conta_envio';
 
   /// Partida cronometrada em andamento: "<id do jogo>|<início ISO 8601>".
   static const keyPartidaEmAndamento = 'partida_em_andamento';

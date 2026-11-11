@@ -46,6 +46,11 @@ quando o jogo chegou no valor que você queria.
 **Quando um jogo sai.** Vendido, trocado ou doado — cada um mexe no dinheiro de
 um jeito, e nenhum deles apaga o seu histórico de partidas.
 
+**Partidas no Comparajogos.** Entrando na sua conta em Ajustes, cada partida
+registrada aqui também fica registrada lá, com placar, vencedor, duração e
+expansão; editar ou apagar aqui faz o mesmo lá. Detalhe em
+[Partidas no Comparajogos](#partidas-no-comparajogos).
+
 **Backup.** Exporta e restaura um JSON. Sem credencial dentro, de propósito.
 
 ---
@@ -55,15 +60,18 @@ um jeito, e nenhum deles apaga o seu histórico de partidas.
 Vale ser explícito, porque é uma decisão de projeto e não um detalhe:
 
 - **Os dados ficam no aparelho**, num SQLite dentro do app.
-- **Não há login em lugar nenhum.** A sincronização com o Comparajogos usa só o
-  seu nome de usuário público — a API deles não tem autenticação, então não há
-  senha para o app guardar.
+- **O único login é opcional e é o do Comparajogos**, para mandar as partidas
+  para a sua conta. Ele é feito na página do próprio Comparajogos, dentro de um
+  WebView: o app não vê nem guarda a senha. A sessão fica nos cookies do
+  WebView, na área privada do app, e "Sair da conta" apaga esses cookies. Ler
+  as listas públicas continua sem login, só pelo nome de usuário.
 - **O token do BGG, se você tiver um, fica fora do backup.** O backup existe para
   sair do aparelho (Drive, e-mail, WhatsApp), e credencial não viaja nisso. Pelo
   mesmo motivo, restaurar um backup não apaga o token que já está lá.
 - **Nada é enviado sem ação sua.** As únicas chamadas de rede são busca no
-  catálogo, sincronização de lista, download de capa e a consulta de versão
-  nova (abaixo), que só lê a página pública de releases.
+  catálogo, sincronização de lista, download de capa, a consulta de versão
+  nova (abaixo), que só lê a página pública de releases, e, se você entrou no
+  Comparajogos, o envio das partidas que você registrar dali em diante.
 
 ### Atualização pela página de releases
 
@@ -252,6 +260,56 @@ adicionar todos encheria a estante do que você não tem e sujaria os custos.
 O app fala com dois catálogos por uma interface só (`GameCatalog`). O Comparajogos
 é o principal; o BGG virou opcional depois que fechou a API.
 
+### Partidas no Comparajogos
+
+A API do Comparajogos não tem chave para aplicativo. O login do site é uma
+sessão de navegador que passa pelo fórum deles (Discourse), e o próprio site
+troca essa sessão por um JWT curto em `GET /api/auth/token`, mandado como
+`Authorization: Bearer` para a API GraphQL. O app faz exatamente isso:
+
+- **Login** (`comparajogos_login_screen.dart`): a página de login deles num
+  WebView. Quando o site volta do login, o app roda o mesmo `fetch` do token
+  dentro da página e lê do JWT quem entrou (`sub` é o id, como no site).
+  "Entrar com Google/Facebook" não funciona em WebView (o Google bloqueia), e
+  a tela avisa: use e-mail e senha.
+- **Token na hora de enviar** (`comparajogos_login.dart`): um WebView
+  invisível abre `robots.txt` do site e roda o mesmo `fetch`. O cookie nunca
+  passa pelo código do app.
+- **As mutations** (`comparajogos_partidas.dart`) são as da tela `/play/add`
+  do site: `insert_play_one` com participantes e expansões aninhados e
+  `deletePlayAndAssociations`. **Não é API documentada**: se o site mudar, o
+  envio falha e a partida espera na fila, sem perder nada no celular.
+
+Como a partida é traduzida:
+
+| No app | No Comparajogos |
+|---|---|
+| jogo | `product_id`, pelo id do BGG ou pelo nome exato (português, depois o principal) |
+| caixa da série jogada | o próprio jogo da partida |
+| expansão jogada | `addons` do jogo-base |
+| duração em minutos | `duration` em **segundos** (sem cronometrar vai 0) |
+| placar | participantes: o seu nome (usuário, nome ou primeiro nome da conta) vira o participante ligado à conta; os outros são achados pelo nome ou criados |
+| vencedor | `is_winner`, com `win_condition: MANUAL`, para o site não recalcular pelo maior placar (erraria em cooperativo) |
+| sem placar | só você, porque o site exige ao menos um participante |
+
+**A fila** fica no banco (`plays.cj_pendente`, `plays.cj_play_id`,
+`plays.cj_erro` e a tabela `cj_apagar`, da migração v11). Ela vai a cada
+partida registrada e a cada abertura do app. Editar apaga a cópia de lá e
+manda a nova. Apagar aqui apaga lá, também quando a rede só volta depois e
+também no "desfazer" do aviso, mesmo que ele chegue no meio do envio.
+`cj_pendente` é um contador para uma edição feita durante o envio não se
+perder. Jogo que não existe lá sai da fila com o motivo, que aparece em
+Ajustes com o botão "Tentar de novo".
+
+**Partidas antigas não vão.** Só entra na fila o que for registrado depois do
+login, e editar uma partida antiga também não a manda, porque ela pode já ter
+sido lançada à mão no site, e mandar criaria uma cópia. Apagar um jogo inteiro
+também não apaga as partidas dele lá.
+
+O WebView é o `flutter_inappwebview` **travado na 6.2.0-beta.3**: a 6.1.5,
+última estável, usa `proguard-android.txt`, que o Android Gradle 9 recusa no
+build de release.
+
 ### Comparajogos (GraphQL)
 
 Preços do mercado brasileiro, nomes em português e as suas listas públicas
@@ -437,6 +495,9 @@ ludoteca/lib/
   services/
     game_catalog.dart          interface de catálogo, neutra de fonte
     comparajogos_service.dart  Comparajogos (GraphQL) — catálogo principal
+    comparajogos_partidas.dart enviar/apagar partidas na conta (API logada)
+    comparajogos_login.dart    sessão no WebView e token para o envio
+    sincronizador_partidas.dart  fila de envio de partidas ao Comparajogos
     bgg_service.dart           XML API2 do BoardGameGeek — opcional, com token
     wishlist_service.dart      sincronizar listas e conferir preço-alvo
     tag_backfill_service.dart  puxar tema/mecânica do catálogo em lote
@@ -455,7 +516,9 @@ ludoteca/lib/
     wishlist_screen.dart       lista de desejos e alerta de preço
     costs_screen.dart          gráficos, separados por tópico
     settings_screen.dart       backup, token do BGG, usuário do Comparajogos
+    comparajogos_login_screen.dart  login do Comparajogos num WebView
   widgets/
+    comparajogos_envio_card.dart  cartão de Ajustes: entrar, fila e erros do envio
     donut_chart.dart           pizza em rosca (CustomPainter)
     month_bar_chart.dart       barras de gasto mensal
     ranked_bar_list.dart       rankings em barra horizontal
@@ -491,6 +554,7 @@ ludoteca/test/
   database_migration_test.dart   abre bancos antigos e roda o onUpgrade
   disposal_scores_test.dart      saída da coleção, troca e placar
   comparajogos_service_test.dart cliente GraphQL com http falso
+  comparajogos_envio_test.dart   envio de partidas e fila, contra um Comparajogos falso
   bgg_service_test.dart          cliente do BGG com http falso (401, 202, XML)
   tags_test.dart                 tema e mecânica
   share_service_test.dart        o texto que vai para o WhatsApp
@@ -498,7 +562,7 @@ ludoteca/test/
   widgets_smoke_test.dart        gráficos renderizam nos dois temas
 ```
 
-272 testes, todos passando. Os de gráfico não checam aparência — checam que
+394 testes, todos passando. Os de gráfico não checam aparência — checam que
 renderizam sem exceção de painter, sem overflow de layout e com a extensão de tema
 presente, nos dois temas. Os de rede usam `MockClient`. Os de banco usam
 `sqflite_common_ffi`, que roda SQLite de verdade no desktop.
